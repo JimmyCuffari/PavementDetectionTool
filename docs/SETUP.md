@@ -52,7 +52,7 @@ In the new project, go to **APIs & Services → Library** and enable:
 3. Application type: **Web application**
 4. Name: `Pavement Dataset Tool Web`
 5. Under **Authorized JavaScript origins**, add:
-   - `https://YOUR_GITHUB_USERNAME.github.io` (for production)
+   - `https://jimmycuffari.github.io` (for production)
    - `http://localhost:5500` (for VS Code Live Server local dev)
    - `http://localhost:3000` (optional, if using a local dev server)
 6. Leave **Authorized redirect URIs** empty (token flow does not redirect)
@@ -86,7 +86,7 @@ Commit and push. This is **not a secret** — OAuth Client IDs for web apps are 
 3. Branch: `main`, Folder: `/docs`
 4. Click **Save**
 5. After a minute, the app will be live at:
-   `https://YOUR_GITHUB_USERNAME.github.io/AutomatedPavementDistressDetection/`
+   `https://jimmycuffari.github.io/PavementDetectionTool/`
 
 ---
 

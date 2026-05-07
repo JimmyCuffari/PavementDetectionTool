@@ -1,5 +1,5 @@
 // Replace with your OAuth 2.0 Client ID from Google Cloud Console
-export const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
+export const CLIENT_ID = '799785166783-rgpmjt05nko3io6nkh5u95n0khrnc4f6.apps.googleusercontent.com.apps.googleusercontent.com';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive',
@@ -42,13 +42,13 @@ export function signIn() {
 }
 
 export function signOut() {
-  if (currentToken) google.accounts.oauth2.revoke(currentToken, () => {});
+  if (currentToken) google.accounts.oauth2.revoke(currentToken, () => { });
   currentToken = null;
   currentUser = null;
 }
 
 export function getToken() { return currentToken; }
-export function getUser()  { return currentUser; }
+export function getUser() { return currentUser; }
 
 // Silently refresh token if it has expired (called automatically by drive.js on 401)
 export async function refreshToken() {
