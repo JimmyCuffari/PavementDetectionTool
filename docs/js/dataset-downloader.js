@@ -113,7 +113,8 @@ async function startScan() {
             imageId: imageFile.id,
             labelName: labelFile.name,
             labelId: labelFile.id,
-            classes: [],
+            classes: [],           // unique class names in this image
+            annotationCounts: {},  // { className: shapeCount }
           });
         }
 
@@ -141,7 +142,11 @@ async function startScan() {
           const buf = await downloadFileContent(token, pair.labelId);
           const json = JSON.parse(new TextDecoder().decode(buf));
           if (Array.isArray(json.shapes)) {
-            pair.classes = [...new Set(json.shapes.map(s => s.label).filter(Boolean))];
+            const labels = json.shapes.map(s => s.label).filter(Boolean);
+            pair.classes = [...new Set(labels)];
+            for (const lbl of labels) {
+              pair.annotationCounts[lbl] = (pair.annotationCounts[lbl] || 0) + 1;
+            }
           }
         } catch { /* leave classes empty on parse error */ }
         fetched++;
@@ -156,7 +161,9 @@ async function startScan() {
     classBreakdown = {};
     for (const pair of scannedPairs) {
       for (const cls of pair.classes) {
-        classBreakdown[cls] = (classBreakdown[cls] || 0) + 1;
+        if (!classBreakdown[cls]) classBreakdown[cls] = { images: 0, annotations: 0 };
+        classBreakdown[cls].images++;
+        classBreakdown[cls].annotations += pair.annotationCounts[cls] || 0;
       }
     }
 
@@ -174,19 +181,21 @@ async function startScan() {
 function renderResults(videoCount) {
   document.getElementById('dl-results').classList.remove('hidden');
 
+  const totalAnnotations = Object.values(classBreakdown).reduce((s, v) => s + v.annotations, 0);
   document.getElementById('dl-stats').innerHTML = `
     <div class="stat"><div class="stat-label">Labeled Pairs</div><div class="stat-value">${scannedPairs.length}</div></div>
+    <div class="stat"><div class="stat-label">Annotations</div><div class="stat-value">${totalAnnotations}</div></div>
     <div class="stat"><div class="stat-label">Video Folders</div><div class="stat-value">${videoCount}</div></div>
     <div class="stat"><div class="stat-label">Classes</div><div class="stat-value">${Object.keys(classBreakdown).length}</div></div>
   `;
 
   const sorted = Object.entries(classBreakdown).sort((a, b) => b[1] - a[1]);
   const classList = document.getElementById('dl-class-list');
-  classList.innerHTML = sorted.map(([cls, count]) => `
+  classList.innerHTML = sorted.map(([cls, { images, annotations }]) => `
     <label class="class-row">
       <input type="checkbox" class="dl-class-check" value="${cls}" checked />
       <span class="class-name">${cls}</span>
-      <span class="class-count text-dim">${count} image${count !== 1 ? 's' : ''}</span>
+      <span class="class-count text-dim">${images} image${images === 1 ? '' : 's'} &middot; ${annotations} annotation${annotations === 1 ? '' : 's'}</span>
     </label>
   `).join('');
 

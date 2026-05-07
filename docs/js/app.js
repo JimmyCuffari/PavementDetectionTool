@@ -2,6 +2,7 @@ import { initAuth, signIn, signOut } from './auth.js';
 import { renderExtractor }  from './frame-extractor.js';
 import { renderUploader }   from './label-uploader.js';
 import { renderDownloader } from './dataset-downloader.js';
+import { renderReviewer }   from './annotation-reviewer.js';
 
 // Wait for both GIS and GAPI to load before initializing
 function waitForGoogleAPIs() {
@@ -49,6 +50,7 @@ async function main() {
   renderExtractor(document.getElementById('tab-extractor'));
   renderUploader(document.getElementById('tab-uploader'));
   renderDownloader(document.getElementById('tab-downloader'));
+  renderReviewer(document.getElementById('tab-reviewer'));
 }
 
 function onSignedIn(user) {
