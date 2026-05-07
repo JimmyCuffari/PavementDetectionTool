@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pavement Dataset Tool</title>
+  <link rel="stylesheet" href="css/app.css" />
+  <script src="https://accounts.google.com/gsi/client" async defer onload="window.gisLoaded && window.gisLoaded()"></script>
+  <script src="https://apis.google.com/js/api.js" async defer onload="window.gapiLoaded && window.gapiLoaded()"></script>
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="header-left">
+      <span class="app-title">Pavement Dataset Tool</span>
+    </div>
+    <div class="header-right">
+      <div id="user-badge" class="user-badge hidden">
+        <img id="user-avatar" src="" alt="avatar" />
+        <span id="user-email"></span>
+        <button id="sign-out-btn" class="btn btn-ghost">Sign out</button>
+      </div>
+      <button id="sign-in-btn" class="btn btn-primary">Sign in with Google</button>
+    </div>
+  </header>
+
+  <div id="auth-wall" class="auth-wall">
+    <div class="auth-card">
+      <h2>Sign in to continue</h2>
+      <p>Use your Google account to access the dataset tools.</p>
+      <button id="auth-wall-btn" class="btn btn-primary btn-large">Sign in with Google</button>
+    </div>
+  </div>
+
+  <main id="app" class="app hidden">
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="extractor">Extract Frames</button>
+      <button class="tab-btn" data-tab="uploader">Upload Labels</button>
+    </nav>
+
+    <div id="tab-extractor" class="tab-panel active">
+      <!-- injected by frame-extractor.js -->
+    </div>
+
+    <div id="tab-uploader" class="tab-panel hidden">
+      <!-- injected by label-uploader.js -->
+    </div>
+  </main>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
