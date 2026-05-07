@@ -1,5 +1,5 @@
 // Replace with your OAuth 2.0 Client ID from Google Cloud Console
-export const CLIENT_ID = '799785166783-rgpmjt05nko3io6nkh5u95n0khrnc4f6.apps.googleusercontent.com.apps.googleusercontent.com';
+export const CLIENT_ID = '799785166783-rgpmjt05nko3io6nkh5u95n0khrnc4f6.apps.googleusercontent.com';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive',
