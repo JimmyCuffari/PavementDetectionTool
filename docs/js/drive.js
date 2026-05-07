@@ -14,7 +14,7 @@ const folderCache = new Map();
 // ── Low-level helpers ──────────────────────────────────────────────────────────
 
 async function driveRequest(token, url, options = {}) {
-  const headers = { Authorization: `Bearer ${token}`, ...(options.headers || {}) };
+  const headers = { Authorization: `Bearer ${token}`, ...options.headers };
   const resp = await fetch(url, { ...options, headers });
   if (resp.status === 401) {
     const newToken = await refreshToken();
@@ -107,6 +107,35 @@ export function uploadFile(token, folderId, filename, mimeType, blob) {
 }
 
 // ── Tracking log ───────────────────────────────────────────────────────────────
+
+// Find PavementDataset root without creating it
+export async function findRootFolder(token) {
+  const q = `name='${ROOT_FOLDER_NAME}' and 'root' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const result = await driveList(token, q, 'files(id,name)');
+  return result.files?.[0] ?? null;
+}
+
+// Paginated file listing — fileFields is the inner mask e.g. 'id,name'
+export async function listAllFiles(token, q, fileFields = 'id,name,mimeType') {
+  const allFiles = [];
+  let pageToken = null;
+  do {
+    const params = new URLSearchParams({ q, fields: `nextPageToken,files(${fileFields})`, pageSize: 1000 });
+    if (pageToken) params.set('pageToken', pageToken);
+    const resp = await driveRequest(token, `${DRIVE_API}/files?${params}`);
+    const data = await resp.json();
+    if (data.files) allFiles.push(...data.files);
+    pageToken = data.nextPageToken ?? null;
+  } while (pageToken);
+  return allFiles;
+}
+
+// Fetch a file's raw content as ArrayBuffer
+export async function downloadFileContent(token, fileId) {
+  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?alt=media`);
+  if (!resp.ok) throw new Error(`${resp.status}`);
+  return resp.arrayBuffer();
+}
 
 export async function appendTracking(token, rootId, entry) {
   const filename = 'tracking.json';

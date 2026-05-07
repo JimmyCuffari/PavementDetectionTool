@@ -1,6 +1,7 @@
-import { initAuth, signIn, signOut, getUser } from './auth.js';
-import { renderExtractor } from './frame-extractor.js';
-import { renderUploader }  from './label-uploader.js';
+import { initAuth, signIn, signOut } from './auth.js';
+import { renderExtractor }  from './frame-extractor.js';
+import { renderUploader }   from './label-uploader.js';
+import { renderDownloader } from './dataset-downloader.js';
 
 // Wait for both GIS and GAPI to load before initializing
 function waitForGoogleAPIs() {
@@ -47,6 +48,7 @@ async function main() {
   // Render view contents immediately (they are hidden until signed in)
   renderExtractor(document.getElementById('tab-extractor'));
   renderUploader(document.getElementById('tab-uploader'));
+  renderDownloader(document.getElementById('tab-downloader'));
 }
 
 function onSignedIn(user) {

@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="css/app.css" />
   <script src="https://accounts.google.com/gsi/client" async defer onload="window.gisLoaded && window.gisLoaded()"></script>
   <script src="https://apis.google.com/js/api.js" async defer onload="window.gapiLoaded && window.gapiLoaded()"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
 
@@ -36,6 +37,7 @@
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="extractor">Extract Frames</button>
       <button class="tab-btn" data-tab="uploader">Upload Labels</button>
+      <button class="tab-btn" data-tab="downloader">Download Dataset</button>
     </nav>
 
     <div id="tab-extractor" class="tab-panel active">
@@ -44,6 +46,10 @@
 
     <div id="tab-uploader" class="tab-panel hidden">
       <!-- injected by label-uploader.js -->
+    </div>
+
+    <div id="tab-downloader" class="tab-panel hidden">
+      <!-- injected by dataset-downloader.js -->
     </div>
   </main>
 

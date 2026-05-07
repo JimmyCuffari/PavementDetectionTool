@@ -240,6 +240,25 @@ body {
 .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
 .stat-value { font-size: 22px; font-weight: 700; color: var(--text-bright); margin-top: 0.15rem; }
 
+/* Class filter rows (Download Dataset tab) */
+.class-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.4rem;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.class-row:hover { background: var(--bg-elevated); }
+.class-row input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; flex-shrink: 0; }
+.class-name { flex: 1; color: var(--text); font-size: 13px; }
+.class-count { font-size: 12px; }
+.btn-sm { padding: 0.25rem 0.6rem; font-size: 12px; }
+
 /* Utility */
 .hidden { display: none !important; }
 .flex-row { display: flex; gap: 0.75rem; align-items: center; }
