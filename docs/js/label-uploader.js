@@ -150,21 +150,18 @@ function renderSummary(totalImages, pairs, inferredName) {
   const folderSelect = document.getElementById('ul-folder-select');
   if (inferredName) folderInput.value = inferredName;
 
-  // Selecting an existing road fills the text input
-  folderSelect.addEventListener('change', () => {
+  folderSelect.onchange = () => {
     if (folderSelect.value) folderInput.value = folderSelect.value;
-  });
+  };
 
-  // Typing a custom name resets the dropdown to the placeholder
-  folderInput.addEventListener('input', () => {
+  folderInput.oninput = () => {
     folderSelect.value = '';
-  });
+  };
 
   populateFolderDropdown(folderSelect);
 
   const uploadBtn = document.getElementById('ul-upload-btn');
-  uploadBtn.onclick = null;
-  uploadBtn.addEventListener('click', () => startUpload(pairs, folderInput.value.trim()));
+  uploadBtn.onclick = () => startUpload(pairs, folderInput.value.trim());
 }
 
 async function populateFolderDropdown(select) {
