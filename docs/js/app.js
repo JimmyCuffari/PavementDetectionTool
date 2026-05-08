@@ -3,7 +3,8 @@ import { MASTER_USERS } from './config.js';
 import { renderExtractor }  from './frame-extractor.js';
 import { renderUploader }   from './label-uploader.js';
 import { renderDownloader } from './dataset-downloader.js';
-import { renderReviewer }   from './annotation-reviewer.js';
+import { renderReviewer }  from './annotation-reviewer.js';
+import { renderRefactor }  from './label-refactor.js';
 
 // Wait for both GIS and GAPI to load before initializing
 function waitForGoogleAPIs() {
@@ -52,6 +53,7 @@ async function main() {
   renderUploader(document.getElementById('tab-uploader'));
   renderDownloader(document.getElementById('tab-downloader'));
   renderReviewer(document.getElementById('tab-reviewer'));
+  renderRefactor(document.getElementById('tab-refactor'));
 }
 
 function onSignedIn(user) {
@@ -65,6 +67,7 @@ function onSignedIn(user) {
 
   if (MASTER_USERS.includes(user.email.toLowerCase())) {
     document.getElementById('reviewer-tab-btn').classList.remove('hidden');
+    document.getElementById('refactor-tab-btn').classList.remove('hidden');
   }
 }
 

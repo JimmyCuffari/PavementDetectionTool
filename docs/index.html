@@ -38,7 +38,8 @@
       <button class="tab-btn active" data-tab="extractor">Extract Frames</button>
       <button class="tab-btn" data-tab="uploader">Upload Labels</button>
       <button class="tab-btn" data-tab="downloader">Download Dataset</button>
-      <button class="tab-btn hidden" data-tab="reviewer" id="reviewer-tab-btn">Review Annotations</button>
+      <button class="tab-btn hidden" data-tab="reviewer"  id="reviewer-tab-btn">Review Annotations</button>
+      <button class="tab-btn hidden" data-tab="refactor" id="refactor-tab-btn">Refactor Labels</button>
     </nav>
 
     <div id="tab-extractor" class="tab-panel active">
@@ -55,6 +56,10 @@
 
     <div id="tab-reviewer" class="tab-panel hidden">
       <!-- injected by annotation-reviewer.js -->
+    </div>
+
+    <div id="tab-refactor" class="tab-panel hidden">
+      <!-- injected by label-refactor.js -->
     </div>
   </main>
 

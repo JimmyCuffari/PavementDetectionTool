@@ -335,6 +335,26 @@ body {
   overflow-y: auto;
 }
 
+/* Label refactor */
+.rf-rename-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+.rf-arrow { color: var(--text-dim); padding-bottom: 0.45rem; flex-shrink: 0; }
+.rf-field-label { font-size: 12px; color: var(--text-dim); display: block; margin-bottom: 0.3rem; }
+.rf-field-input {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+}
+
 /* Utility */
 .hidden { display: none !important; }
 .flex-row { display: flex; gap: 0.75rem; align-items: center; }
