@@ -106,6 +106,34 @@ export function uploadFile(token, folderId, filename, mimeType, blob) {
   );
 }
 
+// Returns Map<filename, fileId> for all non-trashed files in a folder
+export async function indexFolderFiles(token, folderId) {
+  const files = await listAllFiles(token, `'${folderId}' in parents and trashed=false`, 'id,name');
+  return new Map(files.map(f => [f.name, f.id]));
+}
+
+// Create or update a file depending on whether existingId is provided
+export function upsertFile(token, folderId, filename, mimeType, blob, existingId) {
+  return sem(async () => {
+    if (!existingId) {
+      return uploadMultipart(token, { name: filename, mimeType, parents: [folderId] }, blob);
+    }
+    const boundary = 'apdd_mp_boundary';
+    const body = new Blob([
+      `--${boundary}\r\nContent-Type: application/json\r\n\r\n{}\r\n`,
+      `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`,
+      blob,
+      `\r\n--${boundary}--`,
+    ]);
+    const resp = await driveRequest(token, `${DRIVE_UPLOAD}/files/${existingId}?uploadType=multipart`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+      body,
+    });
+    return resp.json();
+  });
+}
+
 // ── Tracking log ───────────────────────────────────────────────────────────────
 
 // Find PavementDataset root without creating it

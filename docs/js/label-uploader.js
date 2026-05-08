@@ -1,5 +1,5 @@
 import { getToken, getUser } from './auth.js';
-import { ensureFolderPath, uploadFile, appendTracking } from './drive.js';
+import { ensureFolderPath, upsertFile, indexFolderFiles, appendTracking } from './drive.js';
 import { collectFilesFromDrop, toast } from './utils.js';
 
 export function renderUploader(container) {
@@ -176,7 +176,17 @@ async function startUpload(pairs, folderName) {
     return;
   }
 
-  const total = pairs.length * 2; // image + json per pair
+  toast('Checking existing files…', 'info');
+  let existingFrames = new Map();
+  let existingLabels = new Map();
+  try {
+    [existingFrames, existingLabels] = await Promise.all([
+      indexFolderFiles(token, folders.framesId),
+      indexFolderFiles(token, folders.labelsId),
+    ]);
+  } catch { /* proceed without index — all files will be treated as new */ }
+
+  const total = pairs.length * 2;
   let done = 0;
   let errors = 0;
 
@@ -190,13 +200,15 @@ async function startUpload(pairs, folderName) {
   const uploads = pairs.flatMap(({ image, json }) => [
     async () => {
       const buf = await image.arrayBuffer();
-      await uploadFile(token, folders.framesId, image.name, image.type || 'image/jpeg', new Blob([buf], { type: 'image/jpeg' }));
+      await upsertFile(token, folders.framesId, image.name, 'image/jpeg',
+        new Blob([buf], { type: 'image/jpeg' }), existingFrames.get(image.name));
       done++;
       setProgress(done);
     },
     async () => {
       const text = await json.text();
-      await uploadFile(token, folders.labelsId, json.name, 'application/json', new Blob([text], { type: 'application/json' }));
+      await upsertFile(token, folders.labelsId, json.name, 'application/json',
+        new Blob([text], { type: 'application/json' }), existingLabels.get(json.name));
       done++;
       setProgress(done);
     },
@@ -204,8 +216,10 @@ async function startUpload(pairs, folderName) {
 
   await Promise.allSettled(uploads.map(fn => fn().catch(e => { errors++; console.warn(e); })));
 
+  const pairWord    = pairs.length === 1 ? 'pair' : 'pairs';
+  const errorSuffix = errors ? ` (${errors} errors)` : '';
   toast(
-    `Uploaded ${pairs.length} image+label pairs.${errors ? ` (${errors} errors)` : ''}`,
+    `Uploaded ${pairs.length} image+label ${pairWord}.${errorSuffix}`,
     errors ? 'error' : 'success'
   );
 

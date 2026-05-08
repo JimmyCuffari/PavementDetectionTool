@@ -1,6 +1,7 @@
 import { getToken } from './auth.js';
 import { findRootFolder, listAllFiles, downloadFileContent } from './drive.js';
 import { makeSemaphore, toast, slugify } from './utils.js';
+import { MASTER_USERS } from './config.js';
 
 let items        = [];      // [{ videoSlug, imageName, imageId, labelName, labelId, uploader }]
 let currentIdx   = 0;
@@ -91,7 +92,17 @@ export function renderReviewer(container) {
 
 // ── Scan ──────────────────────────────────────────────────────────────────────
 
+function isMaster() {
+  const token = getToken();
+  if (!token) return false;
+  // getUser() email check — import lazily to avoid circular deps
+  const el = document.getElementById('user-email');
+  const email = el ? el.textContent.trim().toLowerCase() : '';
+  return MASTER_USERS.includes(email);
+}
+
 async function startScan() {
+  if (!isMaster()) { toast('Access restricted to master reviewers', 'error'); return; }
   const token = getToken();
   if (!token) { toast('Not signed in', 'error'); return; }
 

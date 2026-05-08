@@ -1,4 +1,5 @@
 import { initAuth, signIn, signOut } from './auth.js';
+import { MASTER_USERS } from './config.js';
 import { renderExtractor }  from './frame-extractor.js';
 import { renderUploader }   from './label-uploader.js';
 import { renderDownloader } from './dataset-downloader.js';
@@ -54,15 +55,17 @@ async function main() {
 }
 
 function onSignedIn(user) {
-  // Show user badge
-  document.getElementById('user-email').textContent  = user.email;
-  document.getElementById('user-avatar').src          = user.picture || '';
+  document.getElementById('user-email').textContent = user.email;
+  document.getElementById('user-avatar').src         = user.picture || '';
   document.getElementById('user-badge').classList.remove('hidden');
   document.getElementById('sign-in-btn').classList.add('hidden');
 
-  // Hide auth wall, show app
   document.getElementById('auth-wall').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
+
+  if (MASTER_USERS.includes(user.email.toLowerCase())) {
+    document.getElementById('reviewer-tab-btn').classList.remove('hidden');
+  }
 }
 
 function showAuthWall() {

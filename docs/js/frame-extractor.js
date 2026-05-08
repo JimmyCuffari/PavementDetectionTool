@@ -21,15 +21,6 @@ export function renderExtractor(container) {
 
       <p class="section-title">2. Configure Extraction</p>
       <div class="form-group">
-        <label>
-          Extract every
-          <span id="ex-skip-val">1</span> frame(s)
-          &nbsp;<span class="text-dim">(1 = every frame, like the OpenCV script)</span>
-        </label>
-        <input type="range" id="ex-skip" min="1" max="60" value="1" step="1" />
-      </div>
-
-      <div class="form-group">
         <label>Drive folder name (auto-filled from video filename)</label>
         <input type="text" id="ex-folder-name" placeholder="e.g. road_survey_01"
           style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:var(--font);" />
@@ -52,11 +43,9 @@ export function renderExtractor(container) {
     </div>
   `;
 
-  const fileInput = document.getElementById('ex-file-input');
-  const dropArea  = document.getElementById('ex-drop');
-  const fileName  = document.getElementById('ex-file-name');
-  const skipInput = document.getElementById('ex-skip');
-  const skipVal   = document.getElementById('ex-skip-val');
+  const fileInput   = document.getElementById('ex-file-input');
+  const dropArea    = document.getElementById('ex-drop');
+  const fileName    = document.getElementById('ex-file-name');
   const folderInput = document.getElementById('ex-folder-name');
   const startBtn  = document.getElementById('ex-start-btn');
   const cancelBtn = document.getElementById('ex-cancel-btn');
@@ -88,11 +77,9 @@ export function renderExtractor(container) {
     startBtn.disabled = false;
   }
 
-  skipInput.addEventListener('input', () => { skipVal.textContent = skipInput.value; });
-
   startBtn.addEventListener('click', () => {
     if (!selectedFile) return;
-    startExtraction(selectedFile, parseInt(skipInput.value, 10));
+    startExtraction(selectedFile, 1);
   });
 
   cancelBtn.addEventListener('click', () => {
