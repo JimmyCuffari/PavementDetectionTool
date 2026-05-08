@@ -3,5 +3,5 @@
 export const MASTER_USERS = [
   'jimmycuffari.jr@gmail.com',
   'cuffar29@students.rowan.edu',
-  'anorton@rowan.edu'
+  'nortona@rowan.edu'
 ];

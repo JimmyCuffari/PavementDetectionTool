@@ -1,5 +1,5 @@
 import { getToken, getUser } from './auth.js';
-import { ensureFolderPath, upsertFile, indexFolderFiles, appendTracking } from './drive.js';
+import { ensureFolderPath, upsertFile, indexFolderFiles, appendTracking, findRootFolder, listAllFiles } from './drive.js';
 import { collectFilesFromDrop, toast } from './utils.js';
 
 export function renderUploader(container) {
@@ -31,7 +31,11 @@ export function renderUploader(container) {
 
         <div class="form-group mt-2">
           <label>Drive folder name (where frames &amp; labels will be stored)</label>
-          <input type="text" id="ul-folder-name" placeholder="e.g. road_survey_01"
+          <select id="ul-folder-select"
+            style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:var(--font);margin-bottom:0.4rem;">
+            <option value="">— loading existing roads… —</option>
+          </select>
+          <input type="text" id="ul-folder-name" placeholder="or type a new folder name"
             style="width:100%;padding:0.4rem 0.6rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:var(--font);" />
         </div>
 
@@ -142,12 +146,50 @@ function renderSummary(totalImages, pairs, inferredName) {
   document.getElementById('ul-stat-matched').textContent = pairs.length;
   document.getElementById('ul-stat-skipped').textContent = totalImages - pairs.length;
 
-  const folderInput = document.getElementById('ul-folder-name');
+  const folderInput  = document.getElementById('ul-folder-name');
+  const folderSelect = document.getElementById('ul-folder-select');
   if (inferredName) folderInput.value = inferredName;
+
+  // Selecting an existing road fills the text input
+  folderSelect.addEventListener('change', () => {
+    if (folderSelect.value) folderInput.value = folderSelect.value;
+  });
+
+  // Typing a custom name resets the dropdown to the placeholder
+  folderInput.addEventListener('input', () => {
+    folderSelect.value = '';
+  });
+
+  populateFolderDropdown(folderSelect);
 
   const uploadBtn = document.getElementById('ul-upload-btn');
   uploadBtn.onclick = null;
   uploadBtn.addEventListener('click', () => startUpload(pairs, folderInput.value.trim()));
+}
+
+async function populateFolderDropdown(select) {
+  const token = getToken();
+  if (!token) {
+    select.innerHTML = '<option value="">— sign in to load existing roads —</option>';
+    return;
+  }
+  try {
+    const root = await findRootFolder(token);
+    if (!root) {
+      select.innerHTML = '<option value="">— no existing roads found —</option>';
+      return;
+    }
+    const folders = await listAllFiles(
+      token,
+      `'${root.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      'id,name'
+    );
+    folders.sort((a, b) => a.name.localeCompare(b.name));
+    select.innerHTML = `<option value="">— select an existing road —</option>` +
+      folders.map(f => `<option value="${f.name}">${f.name}</option>`).join('');
+  } catch {
+    select.innerHTML = '<option value="">— could not load roads —</option>';
+  }
 }
 
 async function startUpload(pairs, folderName) {
