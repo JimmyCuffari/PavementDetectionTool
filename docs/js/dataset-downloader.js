@@ -43,6 +43,11 @@ export function renderDownloader(container) {
           </div>
           <div class="progress-bar"><div class="progress-fill" id="dl-dl-fill"></div></div>
         </div>
+
+        <div id="dl-folder-section" style="margin-top:1.5rem;">
+          <p class="section-title">By Folder</p>
+          <div id="dl-folder-table" style="overflow-x:auto;"></div>
+        </div>
       </div>
     </div>
   `;
@@ -189,7 +194,7 @@ function renderResults(videoCount) {
     <div class="stat"><div class="stat-label">Classes</div><div class="stat-value">${Object.keys(classBreakdown).length}</div></div>
   `;
 
-  const sorted = Object.entries(classBreakdown).sort((a, b) => b[1] - a[1]);
+  const sorted = Object.entries(classBreakdown).sort((a, b) => b[1].annotations - a[1].annotations);
   const classList = document.getElementById('dl-class-list');
   classList.innerHTML = sorted.map(([cls, { images, annotations }]) => `
     <label class="class-row">
@@ -211,6 +216,54 @@ function renderResults(videoCount) {
   updateCount();
 
   document.getElementById('dl-download-btn').addEventListener('click', startDownload);
+
+  renderFolderBreakdown(sorted.map(([cls]) => cls));
+}
+
+function renderFolderBreakdown(orderedClasses) {
+  const tableWrap = document.getElementById('dl-folder-table');
+
+  // Build per-folder stats from scannedPairs
+  const folderStats = {};
+  for (const pair of scannedPairs) {
+    if (!folderStats[pair.videoSlug]) folderStats[pair.videoSlug] = { pairs: 0, classes: {} };
+    folderStats[pair.videoSlug].pairs++;
+    for (const cls of pair.classes) {
+      if (!folderStats[pair.videoSlug].classes[cls]) {
+        folderStats[pair.videoSlug].classes[cls] = { images: 0, annotations: 0 };
+      }
+      folderStats[pair.videoSlug].classes[cls].images++;
+      folderStats[pair.videoSlug].classes[cls].annotations += pair.annotationCounts[cls] || 0;
+    }
+  }
+
+  const folders = Object.entries(folderStats).sort((a, b) => a[0].localeCompare(b[0]));
+
+  tableWrap.innerHTML = `
+    <table class="summary-table folder-breakdown-table">
+      <thead>
+        <tr>
+          <th>Folder</th>
+          <th>Pairs</th>
+          ${orderedClasses.map(cls => `<th>${cls}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${folders.map(([slug, data]) => `
+          <tr>
+            <td style="font-family:monospace;font-size:12px;white-space:nowrap;">${slug}</td>
+            <td>${data.pairs}</td>
+            ${orderedClasses.map(cls => {
+              const c = data.classes[cls];
+              return c
+                ? `<td>${c.annotations}<span class="text-dim" style="font-size:11px;"> ann</span><br><span class="text-dim" style="font-size:11px;">${c.images} img</span></td>`
+                : `<td class="text-dim" style="text-align:center;">—</td>`;
+            }).join('')}
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 function getSelectedPairs() {

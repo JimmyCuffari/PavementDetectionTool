@@ -335,6 +335,11 @@ body {
   overflow-y: auto;
 }
 
+/* Folder breakdown table (Download Dataset tab) */
+.folder-breakdown-table th:first-child,
+.folder-breakdown-table td:first-child { min-width: 140px; }
+.folder-breakdown-table td { vertical-align: top; line-height: 1.4; }
+
 /* Label refactor */
 .rf-rename-row {
   display: flex;
