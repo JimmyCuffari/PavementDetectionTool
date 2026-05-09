@@ -305,6 +305,49 @@ body {
 .rv-btn-valid.rv-btn-active:hover   { background: var(--success); }
 .rv-btn-invalid.rv-btn-active:hover { background: var(--danger); }
 .rv-shortcut-hint { font-size: 12px; margin-top: 0.75rem; }
+/* Fullscreen maximize mode */
+.rv-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: #000;
+}
+.rv-fullscreen canvas {
+  display: block;
+}
+.rv-fs-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 1.25rem;
+  background: rgba(18, 18, 18, 0.88);
+  backdrop-filter: blur(6px);
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+.rv-fs-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+input[type="color"].rv-color-pick {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 2px;
+  padding: 0;
+  cursor: pointer;
+  background: none;
+  flex-shrink: 0;
+}
+input[type="color"].rv-color-pick::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"].rv-color-pick::-webkit-color-swatch { border: none; border-radius: 2px; }
 .rv-shortcut-hint kbd {
   display: inline-block;
   padding: 0.05rem 0.35rem;

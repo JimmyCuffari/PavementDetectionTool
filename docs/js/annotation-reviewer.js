@@ -8,14 +8,34 @@ let currentIdx   = 0;
 let decisions    = {};      // { labelId: { status, note, labelName, imageName, videoSlug, uploader } }
 let contentCache = new Map(); // fileId → ArrayBuffer
 
+let showAnnotations = true;
+let currentImg      = null;
+let currentShapes   = [];
+let currentScale    = 1;
+
+let colorOverrides  = {}; // className → hex color string
+const COLOR_STORAGE_KEY = 'pavement_review_colors';
+
 const STORAGE_KEY = 'pavement_review_decisions';
 
 const SHAPE_COLORS = ['#4ec9b0','#dcdcaa','#9cdcfe','#c586c0','#ce9178','#4fc1ff','#b5cea8'];
 
 function classColor(label) {
+  if (colorOverrides[label]) return colorOverrides[label];
   let h = 0;
   for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
   return SHAPE_COLORS[h % SHAPE_COLORS.length];
+}
+
+function saveColorOverrides() {
+  try { localStorage.setItem(COLOR_STORAGE_KEY, JSON.stringify(colorOverrides)); } catch { /* quota */ }
+}
+
+function loadColorOverrides() {
+  try {
+    const saved = localStorage.getItem(COLOR_STORAGE_KEY);
+    if (saved) colorOverrides = JSON.parse(saved);
+  } catch { /* ignore */ }
 }
 
 // ── Render shell ──────────────────────────────────────────────────────────────
@@ -50,6 +70,10 @@ export function renderReviewer(container) {
           <button class="btn btn-ghost btn-sm" id="rv-next">Next &#8594;</button>
         </div>
 
+        <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.3rem;">
+          <button class="btn btn-ghost btn-sm" id="rv-toggle-ann">Hide Annotations</button>
+          <button class="btn btn-ghost btn-sm" id="rv-maximize-btn">⛶ Maximize</button>
+        </div>
         <div class="rv-canvas-wrap">
           <canvas id="rv-canvas"></canvas>
           <div id="rv-loading" class="rv-loading hidden">Loading…</div>
@@ -71,7 +95,7 @@ export function renderReviewer(container) {
         </div>
 
         <div class="rv-shortcut-hint text-dim">
-          Keyboard: <kbd>&#8592;</kbd><kbd>&#8594;</kbd> navigate &nbsp;·&nbsp; <kbd>V</kbd> valid &nbsp;·&nbsp; <kbd>X</kbd> invalid
+          Keyboard: <kbd>&#8592;</kbd><kbd>&#8594;</kbd> navigate &nbsp;·&nbsp; <kbd>V</kbd> valid &nbsp;·&nbsp; <kbd>X</kbd> invalid &nbsp;·&nbsp; <kbd>T</kbd> toggle annotations
         </div>
 
         <div style="margin-top:1.5rem;border-top:1px solid var(--border);padding-top:1rem;" class="flex-row">
@@ -84,10 +108,48 @@ export function renderReviewer(container) {
           <div id="rv-email-list"></div>
         </div>
       </div>
+
+      <div id="rv-fullscreen" class="rv-fullscreen hidden">
+        <canvas id="rv-fs-canvas"></canvas>
+        <div class="rv-fs-controls">
+          <div class="rv-fs-group">
+            <button class="btn btn-ghost btn-sm" id="rv-fs-prev">&#8592; Prev</button>
+            <span id="rv-fs-label" style="font-size:13px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;"></span>
+            <button class="btn btn-ghost btn-sm" id="rv-fs-next">Next &#8594;</button>
+          </div>
+          <div class="rv-fs-group">
+            <button class="btn rv-btn-valid"   id="rv-fs-valid-btn">&#10003; Valid</button>
+            <button class="btn rv-btn-invalid" id="rv-fs-invalid-btn">&#10007; Invalid</button>
+          </div>
+          <div class="rv-fs-group">
+            <button class="btn btn-ghost btn-sm" id="rv-fs-toggle-ann">Hide Annotations</button>
+            <button class="btn btn-ghost btn-sm" id="rv-fs-exit">&#10005; Exit</button>
+          </div>
+        </div>
+      </div>
     </div>
   `;
 
   document.getElementById('rv-scan-btn').addEventListener('click', startScan);
+
+  // Color picker — delegated on the shapes container so it survives re-renders
+  document.getElementById('rv-shapes').addEventListener('input', (e) => {
+    const input = e.target;
+    if (!input.classList.contains('rv-color-pick')) return;
+    const cls   = input.dataset.class;
+    const color = input.value;
+    colorOverrides[cls] = color;
+    saveColorOverrides();
+    // Update chip appearance in-place
+    const chip = input.closest('.rv-class-chip');
+    if (chip) {
+      chip.style.background   = color + '22';
+      chip.style.color        = color;
+      chip.style.borderColor  = color + '55';
+    }
+    drawCanvas();
+    if (isFullscreen()) drawFullscreenCanvas();
+  });
 }
 
 // ── Scan ──────────────────────────────────────────────────────────────────────
@@ -172,6 +234,7 @@ async function startScan() {
     contentCache.clear();
     decisions = {};
     loadDecisions();
+    loadColorOverrides();
 
     setScanProgress(1, 'Scan complete');
     document.getElementById('rv-scan-progress').classList.add('hidden');
@@ -214,12 +277,23 @@ function initReviewUI(token) {
   const firstPending = items.findIndex(it => getStatus(it) === 'pending');
   if (firstPending >= 0) currentIdx = firstPending;
 
-  document.getElementById('rv-prev').onclick       = () => navigate(-1, token);
-  document.getElementById('rv-next').onclick       = () => navigate(1, token);
-  document.getElementById('rv-valid-btn').onclick  = () => markDecision('valid', token);
-  document.getElementById('rv-invalid-btn').onclick= () => markDecision('invalid', token);
-  document.getElementById('rv-note').oninput       = saveCurrentNote;
-  document.getElementById('rv-save-btn').onclick   = buildEmailDrafts;
+  document.getElementById('rv-prev').onclick        = () => navigate(-1, token);
+  document.getElementById('rv-next').onclick        = () => navigate(1, token);
+  document.getElementById('rv-valid-btn').onclick   = () => markDecision('valid', token);
+  document.getElementById('rv-invalid-btn').onclick = () => markDecision('invalid', token);
+  document.getElementById('rv-note').oninput        = saveCurrentNote;
+  document.getElementById('rv-save-btn').onclick    = buildEmailDrafts;
+  document.getElementById('rv-toggle-ann').onclick  = toggleAnnotations;
+  document.getElementById('rv-maximize-btn').onclick = enterFullscreen;
+
+  document.getElementById('rv-fs-prev').onclick        = () => navigate(-1, token);
+  document.getElementById('rv-fs-next').onclick        = () => navigate(1, token);
+  document.getElementById('rv-fs-valid-btn').onclick   = () => markDecision('valid', token);
+  document.getElementById('rv-fs-invalid-btn').onclick = () => markDecision('invalid', token);
+  document.getElementById('rv-fs-toggle-ann').onclick  = toggleAnnotations;
+  document.getElementById('rv-fs-exit').onclick        = exitFullscreen;
+
+  window.addEventListener('resize', () => { if (isFullscreen()) drawFullscreenCanvas(); });
 
   document.addEventListener('keydown', (e) => {
     if (!document.getElementById('rv-main').classList.contains('hidden')) {
@@ -233,10 +307,12 @@ function initReviewUI(token) {
 
 function handleKey(e, token) {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-  if (e.key === 'ArrowLeft')            navigate(-1, token);
-  else if (e.key === 'ArrowRight')      navigate(1, token);
+  if (e.key === 'ArrowLeft')               navigate(-1, token);
+  else if (e.key === 'ArrowRight')         navigate(1, token);
   else if (e.key === 'v' || e.key === 'V') markDecision('valid', token);
   else if (e.key === 'x' || e.key === 'X') markDecision('invalid', token);
+  else if (e.key === 't' || e.key === 'T') toggleAnnotations();
+  else if (e.key === 'Escape')            exitFullscreen();
 }
 
 function navigate(delta, token) {
@@ -295,11 +371,12 @@ async function renderItem(token) {
     canvas.width  = Math.round(img.naturalWidth  * scale);
     canvas.height = Math.round(img.naturalHeight * scale);
 
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-    const shapes = Array.isArray(json.shapes) ? json.shapes : [];
-    for (const shape of shapes) drawShape(ctx, shape, scale);
-    renderShapes(shapes);
+    currentImg    = img;
+    currentShapes = Array.isArray(json.shapes) ? json.shapes : [];
+    currentScale  = scale;
+    drawCanvas();
+    renderShapes(currentShapes);
+    if (isFullscreen()) drawFullscreenCanvas();
 
   } catch (err) {
     canvas.width = 500; canvas.height = 140;
@@ -314,10 +391,75 @@ async function renderItem(token) {
   }
 }
 
+function drawCanvas() {
+  if (!currentImg) return;
+  const canvas = document.getElementById('rv-canvas');
+  const ctx    = canvas.getContext('2d');
+  ctx.drawImage(currentImg, 0, 0, canvas.width, canvas.height);
+  if (showAnnotations) {
+    for (const shape of currentShapes) drawShape(ctx, shape, currentScale);
+  }
+}
+
+function toggleAnnotations() {
+  showAnnotations = !showAnnotations;
+  const label = showAnnotations ? 'Hide Annotations' : 'Show Annotations';
+  const btn   = document.getElementById('rv-toggle-ann');
+  const fsBtn = document.getElementById('rv-fs-toggle-ann');
+  if (btn)   btn.textContent   = label;
+  if (fsBtn) fsBtn.textContent = label;
+  drawCanvas();
+  if (isFullscreen()) drawFullscreenCanvas();
+}
+
 // ── Canvas drawing ────────────────────────────────────────────────────────────
 
-function drawShape(ctx, shape, scale) {
-  const pts = (shape.points || []).map(([x, y]) => [x * scale, y * scale]);
+function isFullscreen() {
+  return !document.getElementById('rv-fullscreen')?.classList.contains('hidden');
+}
+
+function enterFullscreen() {
+  document.getElementById('rv-fullscreen').classList.remove('hidden');
+  drawFullscreenCanvas();
+}
+
+function exitFullscreen() {
+  document.getElementById('rv-fullscreen').classList.add('hidden');
+}
+
+function drawFullscreenCanvas() {
+  const canvas = document.getElementById('rv-fs-canvas');
+  const ctx    = canvas.getContext('2d');
+
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (!currentImg) return;
+
+  const CTRL_H = 64;
+  const avW    = canvas.width;
+  const avH    = canvas.height - CTRL_H;
+  const scale  = Math.min(avW / currentImg.naturalWidth, avH / currentImg.naturalHeight);
+  const w      = Math.round(currentImg.naturalWidth  * scale);
+  const h      = Math.round(currentImg.naturalHeight * scale);
+  const offX   = Math.round((avW - w) / 2);
+  const offY   = Math.round((avH - h) / 2);
+
+  ctx.drawImage(currentImg, offX, offY, w, h);
+
+  if (showAnnotations) {
+    for (const shape of currentShapes) drawShape(ctx, shape, scale, offX, offY);
+  }
+
+  const fsLabel = document.getElementById('rv-fs-label');
+  if (fsLabel) fsLabel.textContent = document.getElementById('rv-item-label')?.textContent ?? '';
+}
+
+function drawShape(ctx, shape, scale, offX = 0, offY = 0) {
+  const pts = (shape.points || []).map(([x, y]) => [x * scale + offX, y * scale + offY]);
   if (!pts.length) return;
   const color = classColor(shape.label || '?');
 
@@ -374,14 +516,27 @@ function renderShapes(shapes) {
     el.innerHTML = '<p class="text-dim" style="font-size:12px;margin-top:0.5rem;">No shapes in this annotation</p>';
     return;
   }
+
+  // One chip per unique class, with count + color picker
+  const classGroups = {};
+  for (const s of shapes) {
+    const lbl = s.label || '(unlabeled)';
+    if (!classGroups[lbl]) classGroups[lbl] = { count: 0, type: s.shape_type || 'polygon' };
+    classGroups[lbl].count++;
+  }
+
   el.innerHTML = `
     <div style="margin:0.6rem 0 0.4rem;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;">
       ${shapes.length} shape${shapes.length === 1 ? '' : 's'}
     </div>
-    ${shapes.map(s => {
-      const c = classColor(s.label || '?');
-      return `<span style="display:inline-block;margin:0.15rem 0.25rem;padding:0.15rem 0.45rem;border-radius:3px;font-size:12px;background:${c}22;color:${c};border:1px solid ${c}55;">
-        ${s.label || '(unlabeled)'} <span style="opacity:0.55;">${s.shape_type || 'polygon'}</span>
+    ${Object.entries(classGroups).map(([lbl, { count, type }]) => {
+      const c = classColor(lbl);
+      return `<span class="rv-class-chip" data-class="${lbl}"
+          style="display:inline-flex;align-items:center;gap:0.3rem;margin:0.15rem 0.25rem;padding:0.15rem 0.45rem;border-radius:3px;font-size:12px;background:${c}22;color:${c};border:1px solid ${c}55;">
+        <input type="color" class="rv-color-pick" data-class="${lbl}" value="${c}"
+          title="Change colour for ${lbl}" />
+        ${lbl}
+        <span style="opacity:0.55;">${count > 1 ? `×${count}` : type}</span>
       </span>`;
     }).join('')}
   `;
@@ -432,8 +587,12 @@ function saveCurrentNote() {
 }
 
 function setButtonState(status) {
-  document.getElementById('rv-valid-btn').classList.toggle('rv-btn-active',   status === 'valid');
-  document.getElementById('rv-invalid-btn').classList.toggle('rv-btn-active', status === 'invalid');
+  document.getElementById('rv-valid-btn').classList.toggle('rv-btn-active',      status === 'valid');
+  document.getElementById('rv-invalid-btn').classList.toggle('rv-btn-active',    status === 'invalid');
+  document.getElementById('rv-fs-valid-btn')?.classList.toggle('rv-btn-active',  status === 'valid');
+  document.getElementById('rv-fs-invalid-btn')?.classList.toggle('rv-btn-active',status === 'invalid');
+  const fsLabel = document.getElementById('rv-fs-label');
+  if (fsLabel) fsLabel.textContent = document.getElementById('rv-item-label')?.textContent ?? '';
 }
 
 function getStatus(item) {
@@ -452,8 +611,11 @@ function updateStats() {
     `${counts.valid + counts.invalid} / ${items.length} reviewed`;
 
   const invalidCount = counts.invalid;
-  document.getElementById('rv-save-hint').textContent =
-    invalidCount > 0 ? `${invalidCount} invalid annotation${invalidCount === 1 ? '' : 's'} will trigger notifications` : '';
+  const plural = invalidCount === 1 ? '' : 's';
+  const saveHint = invalidCount > 0
+    ? `${invalidCount} invalid annotation${plural} will trigger notifications`
+    : '';
+  document.getElementById('rv-save-hint').textContent = saveHint;
 }
 
 // ── Email drafts ──────────────────────────────────────────────────────────────
@@ -549,5 +711,5 @@ function setScanProgress(fraction, text) {
 }
 
 function escHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return str.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
