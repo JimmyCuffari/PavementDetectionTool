@@ -31,9 +31,9 @@ export function renderExtractor(container) {
   `;
 
   const fileInput = document.getElementById('ex-file-input');
-  const dropArea  = document.getElementById('ex-drop');
-  const fileName  = document.getElementById('ex-file-name');
-  const startBtn  = document.getElementById('ex-start-btn');
+  const dropArea = document.getElementById('ex-drop');
+  const fileName = document.getElementById('ex-file-name');
+  const startBtn = document.getElementById('ex-start-btn');
   const cancelBtn = document.getElementById('ex-cancel-btn');
 
   let selectedFile = null;
@@ -75,9 +75,9 @@ async function startExtraction(file) {
   if (!window.JSZip) { toast('ZIP library not loaded — try refreshing', 'error'); return; }
 
   const videoName = file.name.replace(/\.mp4$/i, '');
-  const startBtn  = document.getElementById('ex-start-btn');
+  const startBtn = document.getElementById('ex-start-btn');
   const cancelBtn = document.getElementById('ex-cancel-btn');
-  const progWrap  = document.getElementById('ex-progress-wrap');
+  const progWrap = document.getElementById('ex-progress-wrap');
   const thumbStrip = document.getElementById('ex-thumb-strip');
 
   startBtn.disabled = true;
@@ -92,13 +92,13 @@ async function startExtraction(file) {
   await new Promise((res) => video.addEventListener('loadedmetadata', res, { once: true }));
 
   const canvas = document.createElement('canvas');
-  canvas.width  = video.videoWidth;
+  canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   const ctx = canvas.getContext('2d');
 
-  const fps           = 30;
+  const fps = 30;
   const frameDuration = 1 / fps;
-  const duration      = video.duration;
+  const duration = video.duration;
   const totalEstimated = Math.floor(duration * fps);
 
   const zip = new window.JSZip();
@@ -120,7 +120,7 @@ async function startExtraction(file) {
 
     if (frameIndex % 10 === 0) addThumb(canvas);
 
-    const frameNum = String(frameIndex).padStart(4, '0');
+    const frameNum = String(frameIndex);
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.92));
     zip.file(`${videoName}_frame${frameNum}.jpg`, blob);
     frameIndex++;
@@ -150,8 +150,8 @@ async function startExtraction(file) {
   );
 
   const url = URL.createObjectURL(zipBlob);
-  const a   = document.createElement('a');
-  a.href     = url;
+  const a = document.createElement('a');
+  a.href = url;
   a.download = `${videoName}_frames.zip`;
   a.click();
   URL.revokeObjectURL(url);
@@ -171,17 +171,17 @@ function addThumb(canvas) {
 
 function setProgress(fraction, label, statusText) {
   const fill = document.getElementById('ex-progress-fill');
-  const pct  = document.getElementById('ex-progress-pct');
+  const pct = document.getElementById('ex-progress-pct');
   const text = document.getElementById('ex-progress-text');
   if (!fill) return;
   fill.style.width = `${Math.round(fraction * 100)}%`;
-  pct.textContent  = `${Math.round(fraction * 100)}%`;
+  pct.textContent = `${Math.round(fraction * 100)}%`;
   text.textContent = `${statusText} — ${label}`;
 }
 
 function resetUI() {
-  const startBtn  = document.getElementById('ex-start-btn');
+  const startBtn = document.getElementById('ex-start-btn');
   const cancelBtn = document.getElementById('ex-cancel-btn');
-  if (startBtn)  startBtn.disabled = false;
+  if (startBtn) startBtn.disabled = false;
   if (cancelBtn) cancelBtn.classList.add('hidden');
 }
