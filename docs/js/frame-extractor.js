@@ -31,9 +31,9 @@ export function renderExtractor(container) {
   `;
 
   const fileInput = document.getElementById('ex-file-input');
-  const dropArea = document.getElementById('ex-drop');
-  const fileName = document.getElementById('ex-file-name');
-  const startBtn = document.getElementById('ex-start-btn');
+  const dropArea  = document.getElementById('ex-drop');
+  const fileName  = document.getElementById('ex-file-name');
+  const startBtn  = document.getElementById('ex-start-btn');
   const cancelBtn = document.getElementById('ex-cancel-btn');
 
   let selectedFile = null;
@@ -73,11 +73,15 @@ export function renderExtractor(container) {
 
 async function startExtraction(file) {
   if (!window.JSZip) { toast('ZIP library not loaded — try refreshing', 'error'); return; }
+  if (!('requestVideoFrameCallback' in HTMLVideoElement.prototype)) {
+    toast('Frame-accurate extraction requires Chrome or Edge.', 'error');
+    return;
+  }
 
-  const videoName = file.name.replace(/\.mp4$/i, '');
-  const startBtn = document.getElementById('ex-start-btn');
-  const cancelBtn = document.getElementById('ex-cancel-btn');
-  const progWrap = document.getElementById('ex-progress-wrap');
+  const videoName  = file.name.replace(/\.mp4$/i, '');
+  const startBtn   = document.getElementById('ex-start-btn');
+  const cancelBtn  = document.getElementById('ex-cancel-btn');
+  const progWrap   = document.getElementById('ex-progress-wrap');
   const thumbStrip = document.getElementById('ex-thumb-strip');
 
   startBtn.disabled = true;
@@ -87,53 +91,54 @@ async function startExtraction(file) {
   cancelled = false;
 
   const video = document.createElement('video');
-  video.src = URL.createObjectURL(file);
+  video.src     = URL.createObjectURL(file);
+  video.muted   = true;
   video.preload = 'auto';
   await new Promise((res) => video.addEventListener('loadedmetadata', res, { once: true }));
 
-  const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth;
+  const canvas  = document.createElement('canvas');
+  canvas.width  = video.videoWidth;
   canvas.height = video.videoHeight;
-  const ctx = canvas.getContext('2d');
-
-  const fps = 30;
-  const frameDuration = 1 / fps;
-  const duration = video.duration;
-  const totalEstimated = Math.floor(duration * fps);
+  const ctx     = canvas.getContext('2d');
 
   const zip = new window.JSZip();
   let frameIndex = 0;
 
   setProgress(0, '–', 'Extracting frames…');
 
-  for (let i = 0; ; i++) {
-    if (cancelled) break;
+  // requestVideoFrameCallback fires once per frame as it is presented.
+  // We pause on each callback, draw to canvas while the frame is frozen,
+  // then resume — no time math, no fps assumptions.
+  await new Promise((resolve) => {
+    const onFrame = async () => {
+      if (cancelled) { video.pause(); resolve(); return; }
 
-    const t = i * frameDuration;
-    if (t >= duration) break;
+      video.pause();
+      ctx.drawImage(video, 0, 0);
 
-    video.currentTime = t;
-    await new Promise((res) => video.addEventListener('seeked', res, { once: true }));
-    if (cancelled) break;
+      if (frameIndex % 10 === 0) addThumb(canvas);
 
-    ctx.drawImage(video, 0, 0);
+      const frameNum = String(frameIndex).padStart(4, '0');
+      const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
+      zip.file(`${videoName}_frame${frameNum}.jpg`, blob);
+      frameIndex++;
 
-    if (frameIndex % 10 === 0) addThumb(canvas);
+      const pct = video.duration > 0 ? video.currentTime / video.duration : 0;
+      setProgress(Math.min(pct * 0.88, 0.88), `Frame ${frameIndex}`, 'Extracting…');
 
-    const frameNum = String(frameIndex);
-    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.92));
-    zip.file(`${videoName}_frame${frameNum}.jpg`, blob);
-    frameIndex++;
+      if (cancelled) { resolve(); return; }
 
-    setProgress(
-      Math.min(frameIndex / Math.max(totalEstimated, 1), 0.88),
-      `Frame ${frameIndex}`,
-      'Extracting…'
-    );
+      video.requestVideoFrameCallback(onFrame);
+      video.play().catch(() => {});
+    };
 
-    await new Promise((res) => setTimeout(res, 0));
-  }
+    video.addEventListener('ended', resolve, { once: true });
+    video.playbackRate = 16;
+    video.requestVideoFrameCallback(onFrame);
+    video.play().catch(() => {});
+  });
 
+  video.pause();
   URL.revokeObjectURL(video.src);
 
   if (frameIndex === 0) {
@@ -150,8 +155,8 @@ async function startExtraction(file) {
   );
 
   const url = URL.createObjectURL(zipBlob);
-  const a = document.createElement('a');
-  a.href = url;
+  const a   = document.createElement('a');
+  a.href     = url;
   a.download = `${videoName}_frames.zip`;
   a.click();
   URL.revokeObjectURL(url);
@@ -171,17 +176,17 @@ function addThumb(canvas) {
 
 function setProgress(fraction, label, statusText) {
   const fill = document.getElementById('ex-progress-fill');
-  const pct = document.getElementById('ex-progress-pct');
+  const pct  = document.getElementById('ex-progress-pct');
   const text = document.getElementById('ex-progress-text');
   if (!fill) return;
   fill.style.width = `${Math.round(fraction * 100)}%`;
-  pct.textContent = `${Math.round(fraction * 100)}%`;
+  pct.textContent  = `${Math.round(fraction * 100)}%`;
   text.textContent = `${statusText} — ${label}`;
 }
 
 function resetUI() {
-  const startBtn = document.getElementById('ex-start-btn');
+  const startBtn  = document.getElementById('ex-start-btn');
   const cancelBtn = document.getElementById('ex-cancel-btn');
-  if (startBtn) startBtn.disabled = false;
+  if (startBtn)  startBtn.disabled = false;
   if (cancelBtn) cancelBtn.classList.add('hidden');
 }

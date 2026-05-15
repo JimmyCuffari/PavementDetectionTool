@@ -240,6 +240,32 @@ body {
 .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
 .stat-value { font-size: 22px; font-weight: 700; color: var(--text-bright); margin-top: 0.15rem; }
 
+/* Upload mode selector */
+.ul-mode-bar {
+  display: flex;
+  gap: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  width: fit-content;
+  margin-bottom: 0.25rem;
+}
+.ul-mode-btn {
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 0.35rem 0.9rem;
+  transition: background 0.12s, color 0.12s;
+}
+.ul-mode-btn:last-child { border-right: none; }
+.ul-mode-btn:hover { background: var(--bg-surface); color: var(--text); }
+.ul-mode-btn.active { background: var(--accent); color: #fff; }
+
 /* Class filter rows (Download Dataset tab) */
 .class-row {
   display: flex;

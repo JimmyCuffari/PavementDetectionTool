@@ -2,32 +2,43 @@ import { getToken, getUser } from './auth.js';
 import { ensureFolderPath, upsertFile, indexFolderFiles, appendTracking, findRootFolder, listAllFiles } from './drive.js';
 import { collectFilesFromDrop, toast } from './utils.js';
 
+// 'paired' | 'frames' | 'labels'
+let uploadMode = 'paired';
+
+const MODE_CONFIG = {
+  paired: {
+    label: 'Drop your LabelMe output folder here',
+    sub:   'Should contain image files (.jpg/.png) and matching JSON files',
+  },
+  frames: {
+    label: 'Drop a folder of image files here',
+    sub:   'Uploads images to the frames/ subfolder on Drive',
+  },
+  labels: {
+    label: 'Drop a folder of LabelMe JSON files here',
+    sub:   'Uploads JSONs to the labels/ subfolder on Drive',
+  },
+};
+
 export function renderUploader(container) {
   container.innerHTML = `
     <div style="max-width:700px;">
-      <p class="section-title">1. Drop Your Labeled Folder</p>
+      <div class="ul-mode-bar">
+        <button class="ul-mode-btn active" data-mode="paired">Paired</button>
+        <button class="ul-mode-btn" data-mode="frames">Frames Only</button>
+        <button class="ul-mode-btn" data-mode="labels">Labels Only</button>
+      </div>
+
+      <p class="section-title" style="margin-top:1rem;">1. Drop Your Files</p>
       <div class="file-pick-area" id="ul-drop">
         <div class="pick-icon">📂</div>
-        <div class="pick-label">Drag and drop your LabelMe output folder here</div>
-        <div class="pick-sub">Should contain image files (.jpg/.png) and LabelMe JSON files</div>
+        <div class="pick-label" id="ul-drop-label">${MODE_CONFIG.paired.label}</div>
+        <div class="pick-sub"   id="ul-drop-sub">${MODE_CONFIG.paired.sub}</div>
       </div>
 
       <div id="ul-summary" class="hidden">
-        <p class="section-title">2. Review Matches</p>
-        <div class="stat-row">
-          <div class="stat">
-            <div class="stat-label">Images Found</div>
-            <div class="stat-value" id="ul-stat-total">0</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Labeled (will upload)</div>
-            <div class="stat-value text-success" id="ul-stat-matched">0</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Skipped (no label)</div>
-            <div class="stat-value text-dim" id="ul-stat-skipped">0</div>
-          </div>
-        </div>
+        <p class="section-title">2. Review</p>
+        <div class="stat-row" id="ul-stat-row"></div>
 
         <div class="form-group mt-2">
           <label>Drive folder name (where frames &amp; labels will be stored)</label>
@@ -57,6 +68,18 @@ export function renderUploader(container) {
 
   const dropArea = document.getElementById('ul-drop');
 
+  // Mode selector
+  container.querySelectorAll('.ul-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      uploadMode = btn.dataset.mode;
+      container.querySelectorAll('.ul-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+      const cfg = MODE_CONFIG[uploadMode];
+      document.getElementById('ul-drop-label').textContent = cfg.label;
+      document.getElementById('ul-drop-sub').textContent   = cfg.sub;
+      resetUploader();
+    });
+  });
+
   dropArea.addEventListener('dragover', (e) => { e.preventDefault(); dropArea.classList.add('drag-over'); });
   dropArea.addEventListener('dragleave', () => dropArea.classList.remove('drag-over'));
   dropArea.addEventListener('drop', async (e) => {
@@ -73,58 +96,60 @@ export function renderUploader(container) {
   document.getElementById('ul-reset-btn')?.addEventListener('click', resetUploader);
 }
 
-function processFiles(files, firstItem) {
-  // Try to infer a folder name from the first dropped item
-  let inferredName = '';
+function inferName(firstItem) {
   try {
     const entry = firstItem.webkitGetAsEntry();
-    if (entry && entry.isDirectory) inferredName = entry.name;
+    if (entry && entry.isDirectory) return entry.name;
   } catch {}
+  return '';
+}
 
-  const imageMap = new Map(); // basename → File
-  const jsonMap  = new Map(); // imagePath basename → { file, parsed }
+function processFiles(files, firstItem) {
+  const name = inferName(firstItem);
 
-  for (const file of files) {
-    const ext = file.name.split('.').pop().toLowerCase();
-    if (['jpg', 'jpeg', 'png'].includes(ext)) {
-      imageMap.set(file.name, file);
-    } else if (ext === 'json') {
-      try {
-        // We can't call .text() synchronously; queue async parsing
-      } catch {}
-    }
+  if (uploadMode === 'frames') {
+    const images = files.filter(f => /\.(jpg|jpeg|png)$/i.test(f.name));
+    renderSummarySimple(images, name, 'frames');
+    return;
   }
 
-  // Parse JSONs asynchronously then render summary
+  if (uploadMode === 'labels') {
+    const jsons = files.filter(f => f.name.toLowerCase().endsWith('.json'));
+    renderSummarySimple(jsons, name, 'labels');
+    return;
+  }
+
+  // Paired mode
+  const imageMap = new Map();
+  for (const file of files) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (['jpg', 'jpeg', 'png'].includes(ext)) imageMap.set(file.name, file);
+  }
+
   const jsonFiles = files.filter(f => f.name.toLowerCase().endsWith('.json'));
   Promise.all(jsonFiles.map(parseJson)).then((results) => {
+    const jsonMap = new Map();
     for (const result of results) {
       if (!result) continue;
       const { file, parsed } = result;
       if (!Array.isArray(parsed.shapes) || parsed.shapes.length === 0) continue;
-
-      // Normalize imagePath to basename
-      const raw = parsed.imagePath || '';
+      const raw      = parsed.imagePath || '';
       const basename = raw.split(/[/\\]/).pop();
-
       if (basename) {
         jsonMap.set(basename, { file, parsed });
-
-        // Stem-only fallback: try matching without extension (handles .png vs .jpg mismatches)
         const stem = basename.replace(/\.[^.]+$/, '');
         if (!jsonMap.has(stem)) jsonMap.set(stem, { file, parsed });
       }
     }
 
-    // Build matched pairs
     const pairs = [];
     for (const [imgName, imgFile] of imageMap) {
-      const stem = imgName.replace(/\.[^.]+$/, '');
+      const stem  = imgName.replace(/\.[^.]+$/, '');
       const match = jsonMap.get(imgName) || jsonMap.get(stem);
       if (match) pairs.push({ image: imgFile, json: match.file });
     }
 
-    renderSummary(imageMap.size, pairs, inferredName);
+    renderSummaryPaired(imageMap.size, pairs, name);
   });
 }
 
@@ -138,30 +163,37 @@ async function parseJson(file) {
   }
 }
 
-function renderSummary(totalImages, pairs, inferredName) {
-  const summary = document.getElementById('ul-summary');
-  summary.classList.remove('hidden');
+function renderSummaryPaired(totalImages, pairs, inferredName) {
+  document.getElementById('ul-stat-row').innerHTML = `
+    <div class="stat"><div class="stat-label">Images Found</div><div class="stat-value">${totalImages}</div></div>
+    <div class="stat"><div class="stat-label">Labeled (will upload)</div><div class="stat-value text-success">${pairs.length}</div></div>
+    <div class="stat"><div class="stat-label">Skipped (no label)</div><div class="stat-value text-dim">${totalImages - pairs.length}</div></div>
+  `;
+  const skipped = totalImages - pairs.length;
+  showSummary(inferredName, () => startUpload(pairs, document.getElementById('ul-folder-name').value.trim(), skipped));
+}
 
-  document.getElementById('ul-stat-total').textContent   = totalImages;
-  document.getElementById('ul-stat-matched').textContent = pairs.length;
-  document.getElementById('ul-stat-skipped').textContent = totalImages - pairs.length;
+function renderSummarySimple(files, inferredName, type) {
+  const label = type === 'frames' ? 'Images' : 'JSON Files';
+  document.getElementById('ul-stat-row').innerHTML = `
+    <div class="stat"><div class="stat-label">${label} Found</div><div class="stat-value">${files.length}</div></div>
+    <div class="stat"><div class="stat-label">Will Upload</div><div class="stat-value text-success">${files.length}</div></div>
+  `;
+  showSummary(inferredName, () => startUploadSingle(files, document.getElementById('ul-folder-name').value.trim(), type));
+}
+
+function showSummary(inferredName, onUpload) {
+  document.getElementById('ul-summary').classList.remove('hidden');
 
   const folderInput  = document.getElementById('ul-folder-name');
   const folderSelect = document.getElementById('ul-folder-select');
   if (inferredName) folderInput.value = inferredName;
 
-  folderSelect.onchange = () => {
-    if (folderSelect.value) folderInput.value = folderSelect.value;
-  };
-
-  folderInput.oninput = () => {
-    folderSelect.value = '';
-  };
-
+  folderSelect.onchange = () => { if (folderSelect.value) folderInput.value = folderSelect.value; };
+  folderInput.oninput   = () => { folderSelect.value = ''; };
   populateFolderDropdown(folderSelect);
 
-  const uploadBtn = document.getElementById('ul-upload-btn');
-  uploadBtn.onclick = () => startUpload(pairs, folderInput.value.trim());
+  document.getElementById('ul-upload-btn').onclick = onUpload;
 }
 
 async function populateFolderDropdown(select) {
@@ -189,7 +221,76 @@ async function populateFolderDropdown(select) {
   }
 }
 
-async function startUpload(pairs, folderName) {
+async function startUploadSingle(files, folderName, type) {
+  const token = getToken();
+  const user  = getUser();
+  if (!token || !user) { toast('Not signed in', 'error'); return; }
+  if (!folderName)     { toast('Enter a folder name', 'error'); return; }
+  if (!files.length)   { toast('No files to upload', 'error'); return; }
+
+  const uploadBtn = document.getElementById('ul-upload-btn');
+  const resetBtn  = document.getElementById('ul-reset-btn');
+  const progWrap  = document.getElementById('ul-progress-wrap');
+  uploadBtn.disabled = true;
+  resetBtn.disabled  = true;
+  progWrap.classList.remove('hidden');
+
+  toast('Setting up Drive folders…', 'info');
+  let folders;
+  try {
+    folders = await ensureFolderPath(token, folderName);
+  } catch (err) {
+    toast(`Drive error: ${err.message}`, 'error');
+    uploadBtn.disabled = false;
+    resetBtn.disabled  = false;
+    return;
+  }
+
+  const folderId = type === 'frames' ? folders.framesId : folders.labelsId;
+  const mimeType = type === 'frames' ? 'image/jpeg' : 'application/json';
+
+  toast('Checking existing files…', 'info');
+  let existing = new Map();
+  try { existing = await indexFolderFiles(token, folderId); } catch {}
+
+  let done = 0, errors = 0;
+  const setProgress = (n) => {
+    const pct = Math.round((n / files.length) * 100);
+    document.getElementById('ul-progress-fill').style.width = `${pct}%`;
+    document.getElementById('ul-progress-pct').textContent  = `${pct}%`;
+    document.getElementById('ul-progress-text').textContent = `Uploading file ${n} of ${files.length}`;
+  };
+
+  await Promise.allSettled(files.map(async (file) => {
+    try {
+      const buf = await file.arrayBuffer();
+      await upsertFile(token, folderId, file.name, mimeType, new Blob([buf], { type: mimeType }), existing.get(file.name));
+      done++;
+    } catch (e) {
+      errors++;
+      console.warn(e);
+    }
+    setProgress(done + errors);
+  }));
+
+  const noun      = type === 'frames' ? 'frame' : 'label';
+  const errSuffix = errors ? ` (${errors} errors)` : '';
+  toast(`Uploaded ${done} ${noun}${done === 1 ? '' : 's'}${errSuffix}`, errors ? 'error' : 'success');
+
+  try {
+    await appendTracking(token, folders.rootId, {
+      user:       user.email,
+      action:     `${type}_upload`,
+      folder_name: folderName,
+      file_count:  done,
+    });
+  } catch {}
+
+  uploadBtn.disabled = false;
+  resetBtn.disabled  = false;
+}
+
+async function startUpload(pairs, folderName, skippedCount = 0) {
   const token = getToken();
   const user  = getUser();
   if (!token || !user) { toast('Not signed in', 'error'); return; }
@@ -270,7 +371,7 @@ async function startUpload(pairs, folderName) {
       folder_name: folderName,
       file_count: pairs.length * 2,
       annotated_count: pairs.length,
-      skipped_count: parseInt(document.getElementById('ul-stat-skipped').textContent, 10) || 0,
+      skipped_count: skippedCount,
       labels_folder_id: folders.labelsId,
     });
   } catch (err) {
