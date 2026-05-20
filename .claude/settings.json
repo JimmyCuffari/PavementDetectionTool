@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:mediabunny.dev)",
+      "WebFetch(domain:webcodecsfundamentals.org)",
+      "WebFetch(domain:webrtchacks.com)"
+    ]
+  }
+}

@@ -1,8 +1,6 @@
 import { toast } from './utils.js';
 
-let ffmpegPromise = null; // cached across extractions in the same session
-let activeFFmpeg  = null; // reference held for cancel
-let cancelled     = false;
+let cancelled = false;
 
 export function renderExtractor(container) {
   container.innerHTML = `
@@ -70,50 +68,16 @@ export function renderExtractor(container) {
     cancelled = true;
     cancelBtn.classList.add('hidden');
     toast('Cancelling…', 'info');
-    if (activeFFmpeg) {
-      activeFFmpeg.terminate();
-      ffmpegPromise = null; // force fresh load next time
-      activeFFmpeg  = null;
-    }
     resetUI();
   });
-}
-
-// ── FFmpeg loader (lazy, cached) ───────────────────────────────────────────────
-
-function ensureFFmpeg() {
-  if (!ffmpegPromise) {
-    ffmpegPromise = (async () => {
-      const { toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
-
-      const ffBase   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm';
-      const coreBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.12.6/dist/esm';
-
-      // worker.js must be a same-origin blob URL — module workers block cross-origin scripts
-      const workerBlobURL = await toBlobURL(`${ffBase}/worker.js`, 'text/javascript');
-
-      // Patch index.js to reference the blob worker URL, then import from a blob
-      const indexSrc = await (await fetch(`${ffBase}/index.js`)).text();
-      const patched  = indexSrc.replaceAll('./worker.js', workerBlobURL);
-      const { FFmpeg } = await import(
-        URL.createObjectURL(new Blob([patched], { type: 'text/javascript' }))
-      );
-
-      const ff = new FFmpeg();
-      await ff.load({
-        coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`,  'text/javascript'),
-        wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
-      return ff;
-    })();
-  }
-  return ffmpegPromise;
 }
 
 // ── Extraction ─────────────────────────────────────────────────────────────────
 
 async function startExtraction(file) {
-  if (!window.JSZip) { toast('ZIP library not loaded — try refreshing', 'error'); return; }
+  if (!window.JSZip)        { toast('ZIP library not loaded — try refreshing', 'error'); return; }
+  if (!window.MP4Box)       { toast('MP4Box not loaded — try refreshing', 'error'); return; }
+  if (!window.VideoDecoder) { toast('WebCodecs not supported — use Chrome 94+ or Edge 94+', 'error'); return; }
 
   const videoName  = file.name.replace(/\.[^.]+$/, '');
   const startBtn   = document.getElementById('ex-start-btn');
@@ -127,99 +91,164 @@ async function startExtraction(file) {
   thumbStrip.innerHTML = '';
   cancelled = false;
 
-  setProgress(0, '–', 'Loading FFmpeg…');
-  toast('Loading FFmpeg — first use downloads ~15 MB, then cached', 'info', 7000);
+  setProgress(0.01, '–', 'Parsing video…');
 
-  let ffmpeg;
+  const zip    = new window.JSZip();
+  const canvas = document.createElement('canvas');
+  const ctx    = canvas.getContext('2d');
+
+  let frameIndex  = 0;
+  let totalFrames = 0;
+
+  // Serialize frame rendering — one canvas.toBlob at a time
+  const frameQueue  = [];
+  let   queueBusy   = false;
+
+  async function drainQueue() {
+    if (queueBusy) return;
+    queueBusy = true;
+    while (frameQueue.length > 0 && !cancelled) {
+      const frame = frameQueue.shift();
+      const bmp   = await createImageBitmap(frame);
+      frame.close();
+      ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      bmp.close();
+
+      if (frameIndex % 10 === 0) addThumb(canvas);
+
+      const frameNum = String(frameIndex).padStart(4, '0');
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
+      zip.file(`${videoName}_frame${frameNum}.jpg`, blob);
+
+      frameIndex++;
+      const pct = totalFrames > 0 ? frameIndex / totalFrames : 0;
+      setProgress(Math.min(pct * 0.85, 0.85), `${frameIndex}${totalFrames ? ' / ' + totalFrames : ''}`, 'Extracting…');
+    }
+    queueBusy = false;
+  }
+
+  const decoder = new VideoDecoder({
+    output(frame) { frameQueue.push(frame); drainQueue(); },
+    error(e)      { console.error('VideoDecoder:', e); },
+  });
+
   try {
-    ffmpeg = await ensureFFmpeg();
+    await new Promise((resolve, reject) => {
+      const mp4        = window.MP4Box.createFile();
+      const allSamples = []; // collect before decoding so we can apply backpressure
+
+      mp4.onError = (e) => reject(new Error(String(e)));
+
+      mp4.onReady = (info) => {
+        const track = info.videoTracks[0];
+        if (!track) { reject(new Error('No video track found')); return; }
+
+        totalFrames    = track.nb_samples;
+        canvas.width   = track.video.width;
+        canvas.height  = track.video.height;
+
+        const config = {
+          codec:       track.codec,
+          codedWidth:  track.video.width,
+          codedHeight: track.video.height,
+        };
+        const desc = getCodecDescription(mp4, track.id);
+        if (desc) config.description = desc;
+
+        decoder.configure(config);
+        mp4.setExtractionOptions(track.id, null, { nbSamples: Infinity });
+        mp4.start();
+      };
+
+      mp4.onSamples = (_, __, samples) => {
+        for (const s of samples) allSamples.push(s);
+      };
+
+      mp4.onFlush = async () => {
+        try {
+          // Decode every sample in order with backpressure
+          for (const sample of allSamples) {
+            if (cancelled) break;
+            while (decoder.decodeQueueSize > 20) {
+              await new Promise(r => setTimeout(r, 5));
+            }
+            decoder.decode(new EncodedVideoChunk({
+              type:      sample.is_sync ? 'key' : 'delta',
+              timestamp: (sample.cts  * 1_000_000) / sample.timescale,
+              duration:  (sample.duration * 1_000_000) / sample.timescale,
+              data:      sample.data,
+            }));
+          }
+
+          await decoder.flush();
+
+          // Wait for the render queue to finish
+          while (frameQueue.length > 0 || queueBusy) {
+            await new Promise(r => setTimeout(r, 20));
+          }
+          resolve();
+        } catch (e) { reject(e); }
+      };
+
+      // Feed entire file at once
+      file.arrayBuffer().then(buf => {
+        buf.fileStart = 0;
+        mp4.appendBuffer(buf);
+        mp4.flush();
+      }).catch(reject);
+    });
   } catch (err) {
-    toast(`Failed to load FFmpeg: ${err.message}`, 'error');
+    if (!cancelled) toast(`Extraction failed: ${err.message}`, 'error');
     resetUI();
     return;
   }
 
-  if (cancelled) { resetUI(); return; }
-
-  activeFFmpeg = ffmpeg;
-
-  const onProgress = ({ progress }) => {
-    setProgress(0.1 + Math.min(progress, 1) * 0.74, '–', 'Extracting frames…');
-  };
-  ffmpeg.on('progress', onProgress);
-
-  try {
-    setProgress(0.05, '–', 'Writing video to memory…');
-    await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
-
-    if (cancelled) return;
-
-    setProgress(0.1, '–', 'Extracting frames…');
-    // Equivalent to: ffmpeg -i input.mp4 {videoName}_frame%04d.jpg
-    await ffmpeg.exec(['-i', 'input.mp4', `${videoName}_frame%04d.jpg`]);
-
-    if (cancelled) return;
-
-    const entries    = await ffmpeg.listDir('/');
-    const frameFiles = entries
-      .filter(e => !e.isDir && e.name.startsWith(`${videoName}_frame`) && e.name.endsWith('.jpg'))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    if (frameFiles.length === 0) {
-      toast('No frames extracted — check video format', 'error');
-      return;
-    }
-
-    const zip = new window.JSZip();
-
-    for (let i = 0; i < frameFiles.length; i++) {
-      const data = await ffmpeg.readFile(frameFiles[i].name);
-      zip.file(frameFiles[i].name, data);
-
-      if (i % 10 === 0) addThumb(data);
-
-      setProgress(0.84 + (i / frameFiles.length) * 0.06, `${i + 1} / ${frameFiles.length}`, 'Packaging…');
-    }
-
-    setProgress(0.9, `${frameFiles.length} frames`, 'Generating ZIP…');
-    const zipBlob = await zip.generateAsync(
-      { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
-      ({ percent }) => setProgress(0.9 + (percent / 100) * 0.1, `${frameFiles.length} frames`, 'Compressing…')
-    );
-
-    const url = URL.createObjectURL(zipBlob);
-    const a   = document.createElement('a');
-    a.href     = url;
-    a.download = `${videoName}_frames.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
-
-    setProgress(1, `${frameFiles.length} frames`, 'Done');
-    toast(`Downloaded ${frameFiles.length} frames as ${videoName}_frames.zip`, 'success');
-
-    // Free virtual FS
-    try { await ffmpeg.deleteFile('input.mp4'); } catch {}
-    for (const f of frameFiles) { try { await ffmpeg.deleteFile(f.name); } catch {} }
-
-  } catch (err) {
-    if (!cancelled) toast(`Extraction failed: ${err.message}`, 'error');
-  } finally {
-    ffmpeg.off('progress', onProgress);
-    activeFFmpeg = null;
+  if (cancelled || frameIndex === 0) {
+    if (!cancelled) toast('No frames extracted — check video format', 'error');
     resetUI();
+    return;
   }
+
+  setProgress(0.9, `${frameIndex} frames`, 'Generating ZIP…');
+  const zipBlob = await zip.generateAsync(
+    { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+    ({ percent }) => setProgress(0.9 + (percent / 100) * 0.1, `${frameIndex} frames`, 'Compressing…')
+  );
+
+  const url = URL.createObjectURL(zipBlob);
+  const a   = document.createElement('a');
+  a.href     = url;
+  a.download = `${videoName}_frames.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  setProgress(1, `${frameIndex} frames`, 'Done');
+  toast(`Downloaded ${frameIndex} frames as ${videoName}_frames.zip`, 'success');
+  resetUI();
+}
+
+// Extract the codec description box (avcC, hvcC, etc.) needed by VideoDecoder
+function getCodecDescription(mp4boxFile, trackId) {
+  const track = mp4boxFile.getTrackById(trackId);
+  if (!track) return undefined;
+  for (const entry of track.mdia.minf.stbl.stsd.entries) {
+    const box = entry.avcC ?? entry.hvcC ?? entry.av1C ?? entry.vpcC;
+    if (box) {
+      const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
+      box.write(stream);
+      return new Uint8Array(stream.buffer, 8); // skip 4-byte size + 4-byte type
+    }
+  }
+  return undefined;
 }
 
 // ── UI helpers ─────────────────────────────────────────────────────────────────
 
-function addThumb(data) {
+function addThumb(canvas) {
   const strip = document.getElementById('ex-thumb-strip');
   if (!strip) return;
-  const blob = new Blob([data], { type: 'image/jpeg' });
-  const url  = URL.createObjectURL(blob);
-  const img  = document.createElement('img');
-  img.onload = () => URL.revokeObjectURL(url);
-  img.src    = url;
+  const img = document.createElement('img');
+  img.src   = canvas.toDataURL('image/jpeg', 0.5);
   strip.appendChild(img);
 }
 
