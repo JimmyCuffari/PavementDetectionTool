@@ -84,19 +84,25 @@ export function renderExtractor(container) {
 function ensureFFmpeg() {
   if (!ffmpegPromise) {
     ffmpegPromise = (async () => {
-      const { FFmpeg }     = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
-      const { toBlobURL }  = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+      const { toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+
+      const ffBase   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm';
+      const coreBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.12.6/dist/esm';
+
+      // worker.js must be a same-origin blob URL — module workers block cross-origin scripts
+      const workerBlobURL = await toBlobURL(`${ffBase}/worker.js`, 'text/javascript');
+
+      // Patch index.js to reference the blob worker URL, then import from a blob
+      const indexSrc = await (await fetch(`${ffBase}/index.js`)).text();
+      const patched  = indexSrc.replaceAll('./worker.js', workerBlobURL);
+      const { FFmpeg } = await import(
+        URL.createObjectURL(new Blob([patched], { type: 'text/javascript' }))
+      );
 
       const ff = new FFmpeg();
       await ff.load({
-        coreURL: await toBlobURL(
-          'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.12.6/dist/esm/ffmpeg-core.js',
-          'text/javascript'
-        ),
-        wasmURL: await toBlobURL(
-          'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.12.6/dist/esm/ffmpeg-core.wasm',
-          'application/wasm'
-        ),
+        coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`,  'text/javascript'),
+        wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm'),
       });
       return ff;
     })();
