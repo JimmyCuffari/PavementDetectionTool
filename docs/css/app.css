@@ -162,22 +162,6 @@ body {
   width: 0%;
 }
 
-/* Frame thumbnail strip */
-.thumb-strip {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 1rem;
-  max-height: 200px;
-  overflow-y: auto;
-}
-.thumb-strip img {
-  width: 80px;
-  height: 55px;
-  object-fit: cover;
-  border-radius: 3px;
-  border: 1px solid var(--border);
-}
 
 /* Summary table (label uploader) */
 .summary-table {

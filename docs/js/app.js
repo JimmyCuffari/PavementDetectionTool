@@ -1,67 +1,37 @@
 import { initAuth, signIn, signOut } from './auth.js';
 import { MASTER_USERS } from './config.js';
-import { renderExtractor }  from './frame-extractor.js';
 import { renderUploader }   from './label-uploader.js';
 import { renderDownloader } from './dataset-downloader.js';
-import { renderReviewer }  from './annotation-reviewer.js';
-import { renderRefactor }  from './label-refactor.js';
+import { renderReviewer }   from './annotation-reviewer.js';
+import { renderRefactor }   from './label-refactor.js';
 
-// Wait for both GIS and GAPI to load before initializing
-function waitForGoogleAPIs() {
-  return new Promise((resolve) => {
-    let gapiReady = false;
-    let gisReady  = false;
-    const check = () => { if (gapiReady && gisReady) resolve(); };
+await waitForGoogleAPIs();
 
-    // GAPI fires onload callback
-    window.gapiLoaded = () => { gapiReady = true; check(); };
-    // GIS fires onload callback
-    window.gisLoaded  = () => { gisReady  = true; check(); };
+initAuth(onSignedIn);
 
-    // Poll as fallback in case callbacks already fired before this runs
-    const poll = setInterval(() => {
-      if (typeof gapi !== 'undefined' && typeof google !== 'undefined') {
-        gapiReady = true;
-        gisReady  = true;
-        clearInterval(poll);
-        check();
-      }
-    }, 100);
-  });
-}
+document.getElementById('sign-in-btn').addEventListener('click', signIn);
+document.getElementById('auth-wall-btn').addEventListener('click', signIn);
+document.getElementById('sign-out-btn').addEventListener('click', () => {
+  signOut();
+  showAuthWall();
+});
 
-async function main() {
-  await waitForGoogleAPIs();
+document.querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
 
-  initAuth(onSignedIn);
+renderUploader(document.getElementById('tab-uploader'));
+renderDownloader(document.getElementById('tab-downloader'));
+renderReviewer(document.getElementById('tab-reviewer'));
+renderRefactor(document.getElementById('tab-refactor'));
 
-  // Sign-in buttons (header + auth wall)
-  document.getElementById('sign-in-btn').addEventListener('click', signIn);
-  document.getElementById('auth-wall-btn').addEventListener('click', signIn);
-  document.getElementById('sign-out-btn').addEventListener('click', () => {
-    signOut();
-    showAuthWall();
-  });
-
-  // Tab switching
-  document.querySelectorAll('.tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-  });
-
-  // Render view contents immediately (they are hidden until signed in)
-  renderExtractor(document.getElementById('tab-extractor'));
-  renderUploader(document.getElementById('tab-uploader'));
-  renderDownloader(document.getElementById('tab-downloader'));
-  renderReviewer(document.getElementById('tab-reviewer'));
-  renderRefactor(document.getElementById('tab-refactor'));
-}
+// ── Auth ───────────────────────────────────────────────────────────────────────
 
 function onSignedIn(user) {
   document.getElementById('user-email').textContent = user.email;
   document.getElementById('user-avatar').src         = user.picture || '';
   document.getElementById('user-badge').classList.remove('hidden');
   document.getElementById('sign-in-btn').classList.add('hidden');
-
   document.getElementById('auth-wall').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
 
@@ -78,6 +48,8 @@ function showAuthWall() {
   document.getElementById('app').classList.add('hidden');
 }
 
+// ── Navigation ─────────────────────────────────────────────────────────────────
+
 function switchTab(tabName) {
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
@@ -88,4 +60,23 @@ function switchTab(tabName) {
   });
 }
 
-main();
+// ── Google API loader ──────────────────────────────────────────────────────────
+
+function waitForGoogleAPIs() {
+  return new Promise((resolve) => {
+    let gapiReady = false;
+    let gisReady  = false;
+    const check = () => { if (gapiReady && gisReady) resolve(); };
+
+    globalThis.gapiLoaded = () => { gapiReady = true; check(); };
+    globalThis.gisLoaded  = () => { gisReady  = true; check(); };
+
+    const poll = setInterval(() => {
+      if (typeof gapi !== 'undefined' && typeof google !== 'undefined') {
+        gapiReady = true; gisReady = true;
+        clearInterval(poll);
+        check();
+      }
+    }, 100);
+  });
+}
