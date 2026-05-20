@@ -1,6 +1,8 @@
 import { toast } from './utils.js';
 
-let cancelled = false;
+let ffmpegPromise = null; // cached across extractions in the same session
+let activeFFmpeg  = null; // reference held for cancel
+let cancelled     = false;
 
 export function renderExtractor(container) {
   container.innerHTML = `
@@ -67,18 +69,47 @@ export function renderExtractor(container) {
   cancelBtn.addEventListener('click', () => {
     cancelled = true;
     cancelBtn.classList.add('hidden');
-    toast('Cancelling after current frame…', 'info');
+    toast('Cancelling…', 'info');
+    if (activeFFmpeg) {
+      activeFFmpeg.terminate();
+      ffmpegPromise = null; // force fresh load next time
+      activeFFmpeg  = null;
+    }
+    resetUI();
   });
 }
 
+// ── FFmpeg loader (lazy, cached) ───────────────────────────────────────────────
+
+function ensureFFmpeg() {
+  if (!ffmpegPromise) {
+    ffmpegPromise = (async () => {
+      const { FFmpeg }     = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+      const { toBlobURL }  = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+
+      const ff = new FFmpeg();
+      await ff.load({
+        coreURL: await toBlobURL(
+          'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.12.6/dist/esm/ffmpeg-core.js',
+          'text/javascript'
+        ),
+        wasmURL: await toBlobURL(
+          'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.12.6/dist/esm/ffmpeg-core.wasm',
+          'application/wasm'
+        ),
+      });
+      return ff;
+    })();
+  }
+  return ffmpegPromise;
+}
+
+// ── Extraction ─────────────────────────────────────────────────────────────────
+
 async function startExtraction(file) {
   if (!window.JSZip) { toast('ZIP library not loaded — try refreshing', 'error'); return; }
-  if (!('requestVideoFrameCallback' in HTMLVideoElement.prototype)) {
-    toast('Frame-accurate extraction requires Chrome or Edge.', 'error');
-    return;
-  }
 
-  const videoName  = file.name.replace(/\.mp4$/i, '');
+  const videoName  = file.name.replace(/\.[^.]+$/, '');
   const startBtn   = document.getElementById('ex-start-btn');
   const cancelBtn  = document.getElementById('ex-cancel-btn');
   const progWrap   = document.getElementById('ex-progress-wrap');
@@ -90,87 +121,99 @@ async function startExtraction(file) {
   thumbStrip.innerHTML = '';
   cancelled = false;
 
-  const video = document.createElement('video');
-  video.src     = URL.createObjectURL(file);
-  video.muted   = true;
-  video.preload = 'auto';
-  await new Promise((res) => video.addEventListener('loadedmetadata', res, { once: true }));
+  setProgress(0, '–', 'Loading FFmpeg…');
+  toast('Loading FFmpeg — first use downloads ~15 MB, then cached', 'info', 7000);
 
-  const canvas  = document.createElement('canvas');
-  canvas.width  = video.videoWidth;
-  canvas.height = video.videoHeight;
-  const ctx     = canvas.getContext('2d');
-
-  const zip = new window.JSZip();
-  let frameIndex = 0;
-
-  setProgress(0, '–', 'Extracting frames…');
-
-  // requestVideoFrameCallback fires once per frame as it is presented.
-  // We pause on each callback, draw to canvas while the frame is frozen,
-  // then resume — no time math, no fps assumptions.
-  await new Promise((resolve) => {
-    const onFrame = async () => {
-      if (cancelled) { video.pause(); resolve(); return; }
-
-      video.pause();
-      ctx.drawImage(video, 0, 0);
-
-      if (frameIndex % 10 === 0) addThumb(canvas);
-
-      const frameNum = String(frameIndex).padStart(4, '0');
-      const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
-      zip.file(`${videoName}_frame${frameNum}.jpg`, blob);
-      frameIndex++;
-
-      const pct = video.duration > 0 ? video.currentTime / video.duration : 0;
-      setProgress(Math.min(pct * 0.88, 0.88), `Frame ${frameIndex}`, 'Extracting…');
-
-      if (cancelled) { resolve(); return; }
-
-      video.requestVideoFrameCallback(onFrame);
-      video.play().catch(() => {});
-    };
-
-    video.addEventListener('ended', resolve, { once: true });
-    video.playbackRate = 16;
-    video.requestVideoFrameCallback(onFrame);
-    video.play().catch(() => {});
-  });
-
-  video.pause();
-  URL.revokeObjectURL(video.src);
-
-  if (frameIndex === 0) {
-    toast('No frames extracted', 'error');
+  let ffmpeg;
+  try {
+    ffmpeg = await ensureFFmpeg();
+  } catch (err) {
+    toast(`Failed to load FFmpeg: ${err.message}`, 'error');
     resetUI();
     return;
   }
 
-  setProgress(0.9, `${frameIndex} frames`, 'Generating ZIP…');
+  if (cancelled) { resetUI(); return; }
 
-  const zipBlob = await zip.generateAsync(
-    { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
-    ({ percent }) => setProgress(0.9 + (percent / 100) * 0.1, `${frameIndex} frames`, 'Compressing…')
-  );
+  activeFFmpeg = ffmpeg;
 
-  const url = URL.createObjectURL(zipBlob);
-  const a   = document.createElement('a');
-  a.href     = url;
-  a.download = `${videoName}_frames.zip`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const onProgress = ({ progress }) => {
+    setProgress(0.1 + Math.min(progress, 1) * 0.74, '–', 'Extracting frames…');
+  };
+  ffmpeg.on('progress', onProgress);
 
-  setProgress(1, `${frameIndex} frames`, 'Done');
-  toast(`Downloaded ${frameIndex} frames as ${videoName}_frames.zip`, 'success');
-  resetUI();
+  try {
+    setProgress(0.05, '–', 'Writing video to memory…');
+    await ffmpeg.writeFile('input.mp4', new Uint8Array(await file.arrayBuffer()));
+
+    if (cancelled) return;
+
+    setProgress(0.1, '–', 'Extracting frames…');
+    // Equivalent to: ffmpeg -i input.mp4 {videoName}_frame%04d.jpg
+    await ffmpeg.exec(['-i', 'input.mp4', `${videoName}_frame%04d.jpg`]);
+
+    if (cancelled) return;
+
+    const entries    = await ffmpeg.listDir('/');
+    const frameFiles = entries
+      .filter(e => !e.isDir && e.name.startsWith(`${videoName}_frame`) && e.name.endsWith('.jpg'))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (frameFiles.length === 0) {
+      toast('No frames extracted — check video format', 'error');
+      return;
+    }
+
+    const zip = new window.JSZip();
+
+    for (let i = 0; i < frameFiles.length; i++) {
+      const data = await ffmpeg.readFile(frameFiles[i].name);
+      zip.file(frameFiles[i].name, data);
+
+      if (i % 10 === 0) addThumb(data);
+
+      setProgress(0.84 + (i / frameFiles.length) * 0.06, `${i + 1} / ${frameFiles.length}`, 'Packaging…');
+    }
+
+    setProgress(0.9, `${frameFiles.length} frames`, 'Generating ZIP…');
+    const zipBlob = await zip.generateAsync(
+      { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+      ({ percent }) => setProgress(0.9 + (percent / 100) * 0.1, `${frameFiles.length} frames`, 'Compressing…')
+    );
+
+    const url = URL.createObjectURL(zipBlob);
+    const a   = document.createElement('a');
+    a.href     = url;
+    a.download = `${videoName}_frames.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    setProgress(1, `${frameFiles.length} frames`, 'Done');
+    toast(`Downloaded ${frameFiles.length} frames as ${videoName}_frames.zip`, 'success');
+
+    // Free virtual FS
+    try { await ffmpeg.deleteFile('input.mp4'); } catch {}
+    for (const f of frameFiles) { try { await ffmpeg.deleteFile(f.name); } catch {} }
+
+  } catch (err) {
+    if (!cancelled) toast(`Extraction failed: ${err.message}`, 'error');
+  } finally {
+    ffmpeg.off('progress', onProgress);
+    activeFFmpeg = null;
+    resetUI();
+  }
 }
 
-function addThumb(canvas) {
+// ── UI helpers ─────────────────────────────────────────────────────────────────
+
+function addThumb(data) {
   const strip = document.getElementById('ex-thumb-strip');
   if (!strip) return;
-  const img = document.createElement('img');
-  img.src = canvas.toDataURL('image/jpeg', 0.5);
+  const blob = new Blob([data], { type: 'image/jpeg' });
+  const url  = URL.createObjectURL(blob);
+  const img  = document.createElement('img');
+  img.onload = () => URL.revokeObjectURL(url);
+  img.src    = url;
   strip.appendChild(img);
 }
 
