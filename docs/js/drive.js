@@ -1,5 +1,6 @@
 import { refreshToken } from './auth.js';
 import { slugify, isoNow, makeSemaphore } from './utils.js';
+import { SHARED_FOLDER_ID } from './config.js';
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
@@ -54,7 +55,9 @@ async function findOrCreateFolder(token, name, parentId) {
 
 // Returns { rootId, framesId, labelsId } for a given video name
 export async function ensureFolderPath(token, videoName) {
-  const root = await findOrCreateFolder(token, ROOT_FOLDER_NAME, 'root');
+  const root = SHARED_FOLDER_ID
+    ? { id: SHARED_FOLDER_ID }
+    : await findOrCreateFolder(token, ROOT_FOLDER_NAME, 'root');
   const slug = slugify(videoName.replace(/\.mp4$/i, ''));
   const videoFolder = await findOrCreateFolder(token, slug, root.id);
   const framesFolder = await findOrCreateFolder(token, 'frames', videoFolder.id);
@@ -138,6 +141,7 @@ export function upsertFile(token, folderId, filename, mimeType, blob, existingId
 
 // Find PavementDataset root without creating it
 export async function findRootFolder(token) {
+  if (SHARED_FOLDER_ID) return { id: SHARED_FOLDER_ID, name: ROOT_FOLDER_NAME };
   const q = `name='${ROOT_FOLDER_NAME}' and 'root' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
   const result = await driveList(token, q, 'files(id,name)');
   return result.files?.[0] ?? null;
