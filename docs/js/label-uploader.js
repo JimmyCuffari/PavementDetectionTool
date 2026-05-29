@@ -238,9 +238,11 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
       done++; setProgress(done);
     },
     async () => {
+      const existingId = existingLabels.get(json.name);
       const text = await json.text();
       await upsertFile(token, folders.labelsId, json.name, 'application/json',
-        new Blob([text], { type: 'application/json' }), existingLabels.get(json.name));
+        new Blob([text], { type: 'application/json' }), existingId);
+      if (existingId) clearReviewDecision(existingId);
       done++; setProgress(done);
     },
   ]);
@@ -271,4 +273,16 @@ function resetUploader() {
   document.getElementById('ul-summary').classList.add('hidden');
   document.getElementById('ul-progress-wrap').classList.add('hidden');
   document.getElementById('ul-progress-fill').style.width = '0%';
+}
+
+// When a label file is overwritten, reset its review decision to pending
+// so it shows up for re-review rather than staying marked invalid.
+function clearReviewDecision(fileId) {
+  try {
+    const stored = JSON.parse(localStorage.getItem('pavement_review_decisions') ?? '{}');
+    if (fileId in stored) {
+      delete stored[fileId];
+      localStorage.setItem('pavement_review_decisions', JSON.stringify(stored));
+    }
+  } catch { /* ignore storage errors */ }
 }

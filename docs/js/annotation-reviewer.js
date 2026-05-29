@@ -100,7 +100,16 @@ export function renderReviewer(container) {
 
         <div style="margin-top:1.5rem;border-top:1px solid var(--border);padding-top:1rem;" class="flex-row">
           <button class="btn btn-primary" id="rv-save-btn">Save &amp; Send Notifications</button>
+          <button class="btn btn-ghost"   id="rv-dl-invalid-btn" disabled>Download Invalid (0)</button>
           <span class="text-dim" id="rv-save-hint" style="font-size:13px;"></span>
+        </div>
+
+        <div id="rv-dl-progress" class="progress-wrap hidden">
+          <div class="progress-label">
+            <span id="rv-dl-text">Downloading…</span>
+            <span id="rv-dl-pct">0%</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" id="rv-dl-fill"></div></div>
         </div>
 
         <div id="rv-email-panel" class="hidden" style="margin-top:1.25rem;">
@@ -282,9 +291,10 @@ function initReviewUI(token) {
   document.getElementById('rv-valid-btn').onclick   = () => markDecision('valid', token);
   document.getElementById('rv-invalid-btn').onclick = () => markDecision('invalid', token);
   document.getElementById('rv-note').oninput        = saveCurrentNote;
-  document.getElementById('rv-save-btn').onclick    = buildEmailDrafts;
-  document.getElementById('rv-toggle-ann').onclick  = toggleAnnotations;
-  document.getElementById('rv-maximize-btn').onclick = enterFullscreen;
+  document.getElementById('rv-save-btn').onclick       = buildEmailDrafts;
+  document.getElementById('rv-dl-invalid-btn').onclick = downloadInvalid;
+  document.getElementById('rv-toggle-ann').onclick     = toggleAnnotations;
+  document.getElementById('rv-maximize-btn').onclick   = enterFullscreen;
 
   document.getElementById('rv-fs-prev').onclick        = () => navigate(-1, token);
   document.getElementById('rv-fs-next').onclick        = () => navigate(1, token);
@@ -616,9 +626,78 @@ function updateStats() {
     ? `${invalidCount} invalid annotation${plural} will trigger notifications`
     : '';
   document.getElementById('rv-save-hint').textContent = saveHint;
+
+  const dlBtn = document.getElementById('rv-dl-invalid-btn');
+  if (dlBtn) {
+    dlBtn.textContent = `Download Invalid (${invalidCount})`;
+    dlBtn.disabled    = invalidCount === 0;
+  }
 }
 
 // ── Email drafts ──────────────────────────────────────────────────────────────
+
+async function downloadInvalid() {
+  const token = getToken();
+  if (!token) { toast('Not signed in', 'error'); return; }
+  if (!window.JSZip) { toast('ZIP library not loaded — try refreshing', 'error'); return; }
+
+  const invalidItems = items.filter(it => decisions[it.labelId]?.status === 'invalid');
+  if (!invalidItems.length) { toast('No invalid annotations to download', 'info'); return; }
+
+  const dlBtn   = document.getElementById('rv-dl-invalid-btn');
+  const progWrap = document.getElementById('rv-dl-progress');
+  dlBtn.disabled = true;
+  progWrap.classList.remove('hidden');
+
+  const total = invalidItems.length * 2;
+  let done = 0;
+
+  const setDlProg = (text) => {
+    const pct = Math.round((done / total) * 100);
+    document.getElementById('rv-dl-fill').style.width = `${pct}%`;
+    document.getElementById('rv-dl-pct').textContent  = `${pct}%`;
+    document.getElementById('rv-dl-text').textContent = text;
+  };
+
+  try {
+    const zip    = new window.JSZip();
+    const imgDir = zip.folder('images');
+    const lblDir = zip.folder('labels');
+
+    const sem = makeSemaphore(4);
+    await Promise.all(invalidItems.flatMap(item => [
+      sem(async () => {
+        const buf = await getCached(token, item.imageId);
+        imgDir.file(item.imageName, buf);
+        done++; setDlProg(`Downloading… ${done}/${total}`);
+      }),
+      sem(async () => {
+        const buf = await getCached(token, item.labelId);
+        lblDir.file(item.labelName, buf);
+        done++; setDlProg(`Downloading… ${done}/${total}`);
+      }),
+    ]));
+
+    setDlProg('Generating ZIP…');
+    const blob = await zip.generateAsync(
+      { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } }
+    );
+
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
+    a.href     = url;
+    a.download = `invalid_annotations_${new Date().toISOString().slice(0, 10)}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    toast(`Downloaded ${invalidItems.length} invalid annotation${invalidItems.length === 1 ? '' : 's'}`, 'success');
+  } catch (err) {
+    toast(`Download failed: ${err.message}`, 'error');
+  } finally {
+    dlBtn.disabled = false;
+    progWrap.classList.add('hidden');
+  }
+}
 
 function buildEmailDrafts() {
   const invalid = Object.values(decisions).filter(d => d.status === 'invalid');

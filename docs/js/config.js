@@ -3,7 +3,8 @@
 export const MASTER_USERS = [
   'jimmycuffari.jr@gmail.com',
   'cuffar29@students.rowan.edu',
-  'nortona@rowan.edu'
+  'nortona@rowan.edu',
+  'jvrishitha@gmail.com'
 ];
 
 // The folder ID of the shared PavementDataset folder in the owner's Google Drive.
