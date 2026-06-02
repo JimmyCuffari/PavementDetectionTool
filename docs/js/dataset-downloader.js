@@ -4,8 +4,9 @@ import { makeSemaphore, toast } from './utils.js';
 
 const FETCH_CONCURRENCY = 8;
 
-let scannedPairs = [];   // [{ videoSlug, imageName, imageId, labelName, labelId, classes[] }]
-let classBreakdown = {}; // { className: imageCount }
+let scannedPairs   = [];    // [{ videoSlug, imageName, imageId, labelName, labelId, classes[] }]
+let classBreakdown = {};   // { className: { images, annotations } }
+let excludeInvalid = false;
 
 export function renderDownloader(container) {
   container.innerHTML = `
@@ -25,10 +26,15 @@ export function renderDownloader(container) {
         <div class="stat-row" id="dl-stats"></div>
 
         <p class="section-title" style="margin-top:1.5rem;">Filter by Class</p>
-        <div class="flex-row" style="gap:0.5rem;margin-bottom:0.75rem;">
+        <div class="flex-row" style="gap:0.5rem;margin-bottom:0.5rem;">
           <button class="btn btn-ghost btn-sm" id="dl-select-all">Select All</button>
           <button class="btn btn-ghost btn-sm" id="dl-deselect-all">Deselect All</button>
         </div>
+        <label class="dl-toggle-row" style="margin-bottom:0.75rem;">
+          <input type="checkbox" id="dl-exclude-invalid" />
+          <span>Exclude annotations marked invalid in Review</span>
+          <span class="text-dim" id="dl-excluded-count" style="font-size:12px;"></span>
+        </label>
         <div id="dl-class-list"></div>
 
         <div class="flex-row mt-2">
@@ -213,19 +219,23 @@ function renderResults(videoCount) {
     updateCount();
   };
   classList.addEventListener('change', updateCount);
+
+  document.getElementById('dl-exclude-invalid').checked = excludeInvalid;
+  document.getElementById('dl-exclude-invalid').onchange = (e) => {
+    excludeInvalid = e.target.checked;
+    updateCount();
+  };
+
   updateCount();
-
   document.getElementById('dl-download-btn').addEventListener('click', startDownload);
-
-  renderFolderBreakdown(sorted.map(([cls]) => cls));
 }
 
-function renderFolderBreakdown(orderedClasses) {
+function renderFolderBreakdown(activePairs, orderedClasses) {
   const tableWrap = document.getElementById('dl-folder-table');
 
-  // Build per-folder stats from scannedPairs
+  // Build per-folder stats from the currently active/selected pairs
   const folderStats = {};
-  for (const pair of scannedPairs) {
+  for (const pair of activePairs) {
     if (!folderStats[pair.videoSlug]) folderStats[pair.videoSlug] = { pairs: 0, classes: {} };
     folderStats[pair.videoSlug].pairs++;
     for (const cls of pair.classes) {
@@ -266,15 +276,46 @@ function renderFolderBreakdown(orderedClasses) {
   `;
 }
 
+function getReviewDecisions() {
+  try { return JSON.parse(localStorage.getItem('pavement_review_decisions') ?? '{}'); } catch { return {}; }
+}
+
 function getSelectedPairs() {
   const selected = new Set([...document.querySelectorAll('.dl-class-check:checked')].map(cb => cb.value));
   if (selected.size === 0) return [];
-  return scannedPairs.filter(p => p.classes.some(cls => selected.has(cls)));
+  let pairs = scannedPairs.filter(p => p.classes.some(cls => selected.has(cls)));
+  if (excludeInvalid) {
+    const decisions = getReviewDecisions();
+    pairs = pairs.filter(p => decisions[p.labelId]?.status !== 'invalid');
+  }
+  return pairs;
 }
 
 function updateCount() {
-  const n = getSelectedPairs().length;
+  const active   = getSelectedPairs();
+  const n        = active.length;
   document.getElementById('dl-pair-count').textContent = `${n} image${n !== 1 ? 's' : ''} selected`;
+
+  // Show how many are excluded by the invalid toggle
+  const excludedEl = document.getElementById('dl-excluded-count');
+  if (excludedEl) {
+    if (excludeInvalid) {
+      const selected   = new Set([...document.querySelectorAll('.dl-class-check:checked')].map(cb => cb.value));
+      const decisions  = getReviewDecisions();
+      const excluded   = scannedPairs.filter(p =>
+        p.classes.some(cls => selected.has(cls)) && decisions[p.labelId]?.status === 'invalid'
+      ).length;
+      excludedEl.textContent = excluded > 0 ? `(${excluded} excluded)` : '';
+    } else {
+      excludedEl.textContent = '';
+    }
+  }
+
+  // Rebuild folder breakdown from the active selection
+  const orderedClasses = Object.entries(classBreakdown)
+    .sort((a, b) => b[1].annotations - a[1].annotations)
+    .map(([cls]) => cls);
+  renderFolderBreakdown(active, orderedClasses);
 }
 
 async function startDownload() {

@@ -104,12 +104,27 @@ export function renderReviewer(container) {
           <span class="text-dim" id="rv-save-hint" style="font-size:13px;"></span>
         </div>
 
-        <div id="rv-dl-progress" class="progress-wrap hidden">
-          <div class="progress-label">
-            <span id="rv-dl-text">Downloading…</span>
-            <span id="rv-dl-pct">0%</span>
+        <div id="rv-invalid-panel" class="hidden" style="margin-top:0.75rem;border:1px solid var(--border);border-radius:var(--radius);padding:0.75rem;">
+          <div style="display:flex;gap:1.5rem;">
+            <div style="flex:1;">
+              <p class="section-title" style="margin-bottom:0.5rem;">By Person</p>
+              <div id="rv-invalid-by-person"></div>
+            </div>
+            <div style="flex:1;">
+              <p class="section-title" style="margin-bottom:0.5rem;">By Street</p>
+              <div id="rv-invalid-by-street"></div>
+            </div>
           </div>
-          <div class="progress-bar"><div class="progress-fill" id="rv-dl-fill"></div></div>
+          <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--border);">
+            <button class="btn btn-ghost btn-sm" id="rv-dl-all-btn">Download All Invalid</button>
+          </div>
+          <div id="rv-dl-progress" class="progress-wrap hidden" style="margin-top:0.5rem;">
+            <div class="progress-label">
+              <span id="rv-dl-text">Downloading…</span>
+              <span id="rv-dl-pct">0%</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" id="rv-dl-fill"></div></div>
+          </div>
         </div>
 
         <div id="rv-email-panel" class="hidden" style="margin-top:1.25rem;">
@@ -636,22 +651,66 @@ function updateStats() {
 
 // ── Email drafts ──────────────────────────────────────────────────────────────
 
-async function downloadInvalid() {
+function downloadInvalid() {
+  const invalidItems = items.filter(it => decisions[it.labelId]?.status === 'invalid');
+  if (!invalidItems.length) { toast('No invalid annotations', 'info'); return; }
+
+  const panel = document.getElementById('rv-invalid-panel');
+  const isOpen = !panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', isOpen);
+  if (!isOpen) buildInvalidBreakdown(invalidItems);
+}
+
+function buildInvalidBreakdown(invalidItems) {
+  const byPerson = {};
+  const byStreet = {};
+  for (const item of invalidItems) {
+    const person = item.uploader || '(unknown)';
+    (byPerson[person] ??= []).push(item);
+    (byStreet[item.videoSlug] ??= []).push(item);
+  }
+
+  const renderRows = (groups, type, container) => {
+    container.innerHTML = Object.entries(groups)
+      .sort(([, a], [, b]) => b.length - a.length)
+      .map(([key, subset]) => `
+        <div class="rv-dl-row">
+          <span class="rv-dl-label">${escHtml(key)}<span class="text-dim"> (${subset.length})</span></span>
+          <button class="btn btn-ghost btn-sm rv-dl-subset"
+            data-type="${type}" data-key="${escHtml(key)}">Download</button>
+        </div>
+      `).join('');
+
+    container.querySelectorAll('.rv-dl-subset').forEach(btn => {
+      btn.onclick = () => {
+        const key = btn.dataset.key;
+        const subset = type === 'person'
+          ? invalidItems.filter(it => (it.uploader || '(unknown)') === key)
+          : invalidItems.filter(it => it.videoSlug === key);
+        const safe = key.replaceAll(/[^a-z0-9_-]/gi, '_').toLowerCase();
+        downloadInvalidSubset(subset, `invalid_${type}_${safe}_${new Date().toISOString().slice(0,10)}.zip`);
+      };
+    });
+  };
+
+  renderRows(byPerson, 'person', document.getElementById('rv-invalid-by-person'));
+  renderRows(byStreet, 'street', document.getElementById('rv-invalid-by-street'));
+
+  document.getElementById('rv-dl-all-btn').onclick = () =>
+    downloadInvalidSubset(invalidItems, `invalid_all_${new Date().toISOString().slice(0,10)}.zip`);
+}
+
+async function downloadInvalidSubset(subset, filename) {
   const token = getToken();
   if (!token) { toast('Not signed in', 'error'); return; }
   if (!window.JSZip) { toast('ZIP library not loaded — try refreshing', 'error'); return; }
+  if (!subset.length) { toast('Nothing to download', 'info'); return; }
 
-  const invalidItems = items.filter(it => decisions[it.labelId]?.status === 'invalid');
-  if (!invalidItems.length) { toast('No invalid annotations to download', 'info'); return; }
-
-  const dlBtn   = document.getElementById('rv-dl-invalid-btn');
   const progWrap = document.getElementById('rv-dl-progress');
-  dlBtn.disabled = true;
   progWrap.classList.remove('hidden');
 
-  const total = invalidItems.length * 2;
+  const total = subset.length * 2;
   let done = 0;
-
   const setDlProg = (text) => {
     const pct = Math.round((done / total) * 100);
     document.getElementById('rv-dl-fill').style.width = `${pct}%`;
@@ -663,38 +722,30 @@ async function downloadInvalid() {
     const zip    = new window.JSZip();
     const imgDir = zip.folder('images');
     const lblDir = zip.folder('labels');
+    const sem    = makeSemaphore(4);
 
-    const sem = makeSemaphore(4);
-    await Promise.all(invalidItems.flatMap(item => [
+    await Promise.all(subset.flatMap(item => [
       sem(async () => {
-        const buf = await getCached(token, item.imageId);
-        imgDir.file(item.imageName, buf);
+        imgDir.file(item.imageName, await getCached(token, item.imageId));
         done++; setDlProg(`Downloading… ${done}/${total}`);
       }),
       sem(async () => {
-        const buf = await getCached(token, item.labelId);
-        lblDir.file(item.labelName, buf);
+        lblDir.file(item.labelName, await getCached(token, item.labelId));
         done++; setDlProg(`Downloading… ${done}/${total}`);
       }),
     ]));
 
     setDlProg('Generating ZIP…');
-    const blob = await zip.generateAsync(
-      { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } }
-    );
-
-    const url = URL.createObjectURL(blob);
-    const a   = document.createElement('a');
-    a.href     = url;
-    a.download = `invalid_annotations_${new Date().toISOString().slice(0, 10)}.zip`;
-    a.click();
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
 
-    toast(`Downloaded ${invalidItems.length} invalid annotation${invalidItems.length === 1 ? '' : 's'}`, 'success');
+    toast(`Downloaded ${subset.length} pair${subset.length === 1 ? '' : 's'}`, 'success');
   } catch (err) {
     toast(`Download failed: ${err.message}`, 'error');
   } finally {
-    dlBtn.disabled = false;
     progWrap.classList.add('hidden');
   }
 }
