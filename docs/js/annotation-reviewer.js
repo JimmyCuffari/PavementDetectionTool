@@ -1,5 +1,5 @@
 import { getToken } from './auth.js';
-import { findRootFolder, listAllFiles, downloadFileContent } from './drive.js';
+import { findRootFolder, listAllFiles, downloadFileContent, fetchReviewDecisions, saveReviewDecisions } from './drive.js';
 import { makeSemaphore, toast, slugify } from './utils.js';
 import { MASTER_USERS } from './config.js';
 
@@ -7,6 +7,11 @@ let items        = [];      // [{ videoSlug, imageName, imageId, labelName, labe
 let currentIdx   = 0;
 let decisions    = {};      // { labelId: { status, note, labelName, imageName, videoSlug, uploader } }
 let contentCache = new Map(); // fileId → ArrayBuffer
+
+let rootId          = null; // shared Drive root folder ID (for syncing review_decisions.json)
+let decisionsFileId = null; // Drive file ID of review_decisions.json, once known
+let saveInFlight    = false;
+let savePending     = false;
 
 let showAnnotations = true;
 let currentImg      = null;
@@ -67,7 +72,10 @@ export function renderReviewer(container) {
         <div class="rv-nav">
           <button class="btn btn-ghost btn-sm" id="rv-prev">&#8592; Prev</button>
           <span id="rv-item-label" class="text-dim" style="font-size:13px;"></span>
-          <button class="btn btn-ghost btn-sm" id="rv-next">Next &#8594;</button>
+          <div class="flex-row" style="gap:0.5rem;">
+            <button class="btn btn-ghost btn-sm" id="rv-next-unrated">Next Unrated &#8594;</button>
+            <button class="btn btn-ghost btn-sm" id="rv-next">Next &#8594;</button>
+          </div>
         </div>
 
         <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.3rem;">
@@ -140,6 +148,7 @@ export function renderReviewer(container) {
             <button class="btn btn-ghost btn-sm" id="rv-fs-prev">&#8592; Prev</button>
             <span id="rv-fs-label" style="font-size:13px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;"></span>
             <button class="btn btn-ghost btn-sm" id="rv-fs-next">Next &#8594;</button>
+            <button class="btn btn-ghost btn-sm" id="rv-fs-next-unrated">Next Unrated &#8594;</button>
           </div>
           <div class="rv-fs-group">
             <button class="btn rv-btn-valid"   id="rv-fs-valid-btn">&#10003; Valid</button>
@@ -201,6 +210,7 @@ async function startScan() {
     setScanProgress(0, 'Finding PavementDataset folder…');
     const root = await findRootFolder(token);
     if (!root) { toast('PavementDataset folder not found. Upload some data first.', 'info'); return; }
+    rootId = root.id;
 
     setScanProgress(0.05, 'Loading uploader info…');
     const uploaderMap = await buildUploaderMap(token, root.id);
@@ -257,7 +267,8 @@ async function startScan() {
     items = allItems;
     contentCache.clear();
     decisions = {};
-    loadDecisions();
+    setScanProgress(0.97, 'Loading review decisions…');
+    await loadDecisions(token);
     loadColorOverrides();
 
     setScanProgress(1, 'Scan complete');
@@ -303,6 +314,7 @@ function initReviewUI(token) {
 
   document.getElementById('rv-prev').onclick        = () => navigate(-1, token);
   document.getElementById('rv-next').onclick        = () => navigate(1, token);
+  document.getElementById('rv-next-unrated').onclick = () => goToNextUnrated(token);
   document.getElementById('rv-valid-btn').onclick   = () => markDecision('valid', token);
   document.getElementById('rv-invalid-btn').onclick = () => markDecision('invalid', token);
   document.getElementById('rv-note').oninput        = saveCurrentNote;
@@ -313,6 +325,7 @@ function initReviewUI(token) {
 
   document.getElementById('rv-fs-prev').onclick        = () => navigate(-1, token);
   document.getElementById('rv-fs-next').onclick        = () => navigate(1, token);
+  document.getElementById('rv-fs-next-unrated').onclick = () => goToNextUnrated(token);
   document.getElementById('rv-fs-valid-btn').onclick   = () => markDecision('valid', token);
   document.getElementById('rv-fs-invalid-btn').onclick = () => markDecision('invalid', token);
   document.getElementById('rv-fs-toggle-ann').onclick  = toggleAnnotations;
@@ -343,6 +356,19 @@ function handleKey(e, token) {
 function navigate(delta, token) {
   currentIdx = Math.max(0, Math.min(items.length - 1, currentIdx + delta));
   renderItem(token);
+}
+
+// Jumps to the next item (after the current one, wrapping around) that hasn't been rated yet
+function goToNextUnrated(token) {
+  for (let i = 1; i <= items.length; i++) {
+    const idx = (currentIdx + i) % items.length;
+    if (getStatus(items[idx]) === 'pending') {
+      currentIdx = idx;
+      renderItem(token);
+      return;
+    }
+  }
+  toast('No unrated items left', 'success');
 }
 
 // ── Render current item ───────────────────────────────────────────────────────
@@ -815,21 +841,66 @@ async function getCached(token, fileId) {
 }
 
 function saveDecisions() {
+  // Local cache so the UI survives a refresh even if the Drive sync hasn't landed yet
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(decisions)); } catch { /* quota */ }
+
+  if (!rootId) return;
+  const token = getToken();
+  if (!token) return;
+  persistDecisionsToDrive(token);
 }
 
-function loadDecisions() {
+async function persistDecisionsToDrive(token) {
+  if (saveInFlight) { savePending = true; return; }
+  saveInFlight = true;
+  try {
+    decisionsFileId = await saveReviewDecisions(token, rootId, decisions, decisionsFileId);
+  } catch (err) {
+    console.warn('Failed to sync review decisions to Drive:', err);
+    toast('Failed to sync review status to Drive', 'error');
+  } finally {
+    saveInFlight = false;
+    if (savePending) {
+      savePending = false;
+      persistDecisionsToDrive(token);
+    }
+  }
+}
+
+async function loadDecisions(token) {
+  const validIds = new Set(items.map(it => it.labelId));
+
+  let driveDecisions = {};
+  try {
+    const result = await fetchReviewDecisions(token, rootId);
+    driveDecisions  = result.decisions;
+    decisionsFileId = result.fileId;
+  } catch (err) {
+    console.warn('Failed to load review decisions from Drive:', err);
+    toast('Could not load shared review decisions from Drive', 'error');
+  }
+
+  // Merge in any decisions still sitting only in this browser's localStorage
+  // (e.g. made before Drive syncing was added) so they aren't lost.
+  let localDecisions = {};
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      // Only restore decisions whose labelId exists in the current scan
-      const validIds = new Set(items.map(it => it.labelId));
-      for (const [id, dec] of Object.entries(parsed)) {
-        if (validIds.has(id)) decisions[id] = dec;
-      }
-    }
+    if (saved) localDecisions = JSON.parse(saved);
   } catch { /* ignore */ }
+
+  const merged = { ...driveDecisions };
+  let hasLocalOnly = false;
+  for (const [id, dec] of Object.entries(localDecisions)) {
+    if (!(id in merged)) { merged[id] = dec; hasLocalOnly = true; }
+  }
+
+  for (const [id, dec] of Object.entries(merged)) {
+    if (validIds.has(id)) decisions[id] = dec;
+  }
+
+  if (hasLocalOnly) {
+    saveDecisions(); // push the merged result (incl. local-only entries) back to Drive
+  }
 }
 
 function setScanProgress(fraction, text) {

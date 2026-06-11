@@ -1,5 +1,5 @@
 import { getToken, getUser } from './auth.js';
-import { ensureFolderPath, upsertFile, indexFolderFiles, appendTracking, findRootFolder, listAllFiles } from './drive.js';
+import { ensureFolderPath, upsertFile, indexFolderFiles, appendTracking, findRootFolder, listAllFiles, fetchReviewDecisions, saveReviewDecisions } from './drive.js';
 import { collectFilesFromDrop, toast } from './utils.js';
 
 // Accumulated file pool — persists across drops until Start Over
@@ -230,6 +230,7 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
     document.getElementById('ul-progress-text').textContent = `Uploading file ${n} of ${total}`;
   };
 
+  const clearedIds = [];
   const uploads = pairs.flatMap(({ image, json }) => [
     async () => {
       const buf = await image.arrayBuffer();
@@ -242,12 +243,14 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
       const text = await json.text();
       await upsertFile(token, folders.labelsId, json.name, 'application/json',
         new Blob([text], { type: 'application/json' }), existingId);
-      if (existingId) clearReviewDecision(existingId);
+      if (existingId) clearedIds.push(existingId);
       done++; setProgress(done);
     },
   ]);
 
   await Promise.allSettled(uploads.map(fn => fn().catch(e => { errors++; console.warn(e); })));
+
+  if (clearedIds.length) await clearReviewDecisions(token, folders.rootId, clearedIds);
 
   const pairWord  = pairs.length === 1 ? 'pair' : 'pairs';
   const errSuffix = errors ? ` (${errors} errors)` : '';
@@ -275,14 +278,26 @@ function resetUploader() {
   document.getElementById('ul-progress-fill').style.width = '0%';
 }
 
-// When a label file is overwritten, reset its review decision to pending
-// so it shows up for re-review rather than staying marked invalid.
-function clearReviewDecision(fileId) {
+// When label files are overwritten, reset their review decisions to pending
+// so they show up for re-review rather than staying marked invalid.
+async function clearReviewDecisions(token, rootId, fileIds) {
   try {
     const stored = JSON.parse(localStorage.getItem('pavement_review_decisions') ?? '{}');
-    if (fileId in stored) {
-      delete stored[fileId];
-      localStorage.setItem('pavement_review_decisions', JSON.stringify(stored));
+    let changed = false;
+    for (const id of fileIds) {
+      if (id in stored) { delete stored[id]; changed = true; }
     }
+    if (changed) localStorage.setItem('pavement_review_decisions', JSON.stringify(stored));
   } catch { /* ignore storage errors */ }
+
+  try {
+    const { decisions, fileId } = await fetchReviewDecisions(token, rootId);
+    let changed = false;
+    for (const id of fileIds) {
+      if (id in decisions) { delete decisions[id]; changed = true; }
+    }
+    if (changed) await saveReviewDecisions(token, rootId, decisions, fileId);
+  } catch (err) {
+    console.warn('Failed to update shared review decisions on Drive:', err);
+  }
 }

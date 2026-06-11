@@ -169,6 +169,50 @@ export async function downloadFileContent(token, fileId) {
   return resp.arrayBuffer();
 }
 
+// ── Review decisions (shared across all users) ────────────────────────────────
+
+const REVIEW_DECISIONS_FILE = 'review_decisions.json';
+
+// Returns { decisions: {labelId: {...}}, fileId } — fileId is null if not yet created
+export async function fetchReviewDecisions(token, rootId) {
+  const q = `name='${REVIEW_DECISIONS_FILE}' and '${rootId}' in parents and trashed=false`;
+  const search = await driveList(token, q, 'files(id)');
+  if (!search.files || search.files.length === 0) return { decisions: {}, fileId: null };
+
+  const fileId = search.files[0].id;
+  try {
+    const buf  = await downloadFileContent(token, fileId);
+    const data = JSON.parse(new TextDecoder().decode(buf));
+    return { decisions: (data && typeof data === 'object') ? data : {}, fileId };
+  } catch {
+    return { decisions: {}, fileId };
+  }
+}
+
+// Writes the full decisions map back to Drive. Returns the file's ID.
+export async function saveReviewDecisions(token, rootId, decisions, fileId) {
+  const blob = new Blob([JSON.stringify(decisions, null, 2)], { type: 'application/json' });
+
+  if (!fileId) {
+    const result = await uploadMultipart(token, { name: REVIEW_DECISIONS_FILE, mimeType: 'application/json', parents: [rootId] }, blob);
+    return result.id;
+  }
+
+  const boundary = 'apdd_mp_boundary';
+  const body = new Blob([
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n{}\r\n`,
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n`,
+    blob,
+    `\r\n--${boundary}--`,
+  ]);
+  await driveRequest(token, `${DRIVE_UPLOAD}/files/${fileId}?uploadType=multipart`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  return fileId;
+}
+
 export async function appendTracking(token, rootId, entry) {
   const filename = 'tracking.json';
   const q = `name='${filename}' and '${rootId}' in parents and trashed=false`;
