@@ -1,5 +1,6 @@
 import { getToken } from './auth.js';
-import { findRootFolder, listAllFiles, downloadFileContent, upsertFile } from './drive.js';
+import { listAllFiles, downloadFileContent, upsertFile } from './drive.js';
+import { getDatasetRawDataFolder } from './dataset-manager.js';
 import { makeSemaphore, toast } from './utils.js';
 import { MASTER_USERS } from './config.js';
 
@@ -86,9 +87,10 @@ async function startScan() {
   document.getElementById('rf-results').classList.add('hidden');
 
   try {
-    setScanProgress(0, 'Finding PavementDataset folder…');
-    const root = await findRootFolder(token);
-    if (!root) { toast('PavementDataset folder not found', 'info'); return; }
+    setScanProgress(0, 'Finding raw data folder…');
+    const rawDataFolder = await getDatasetRawDataFolder(token);
+    if (!rawDataFolder) { toast('No dataset open', 'error'); return; }
+    const root = rawDataFolder;
 
     setScanProgress(0.05, 'Listing video folders…');
     const videoFolders = await listAllFiles(
