@@ -69,7 +69,10 @@ function rerender() {
     <div style="max-width:640px;">
       <div class="flex-row" style="justify-content:space-between;align-items:center;margin-bottom:1.25rem;">
         <p class="section-title" style="margin:0;">Projects</p>
-        <button class="btn btn-primary btn-sm" id="pm-new-btn">+ New Project</button>
+        <div class="flex-row" style="gap:0.5rem;">
+          <button class="btn btn-ghost btn-sm" id="pm-sync-btn" title="Re-import projects from ModelTool folder in Drive">↻ Sync from Drive</button>
+          <button class="btn btn-primary btn-sm" id="pm-new-btn">+ New Project</button>
+        </div>
       </div>
 
       <div id="pm-form" class="pm-form hidden">
@@ -131,6 +134,8 @@ function rerender() {
 // ── Form wiring ────────────────────────────────────────────────────────────────
 
 function wireForm() {
+  document.getElementById('pm-sync-btn').addEventListener('click', syncFromDrive);
+
   document.getElementById('pm-new-btn').addEventListener('click', () => {
     const form = document.getElementById('pm-form');
     form.classList.toggle('hidden');
@@ -174,6 +179,58 @@ function updateFormHint(mode) {
   hint.innerHTML = mode === 'new'
     ? `A folder named after this project will be created inside <strong style="color:var(--text);">ModelTool</strong>.`
     : `The project will be linked to the selected folder inside <strong style="color:var(--text);">ModelTool</strong>.`;
+}
+
+async function syncFromDrive() {
+  const btn   = document.getElementById('pm-sync-btn');
+  const token = getToken();
+  if (!token) { toast('Not signed in', 'error'); return; }
+
+  btn.disabled    = true;
+  btn.textContent = '↻ Syncing…';
+
+  try {
+    const modelTool = await findFolder(token, ROOT_FOLDER, 'root');
+    if (!modelTool) {
+      toast('ModelTool folder not found in Drive', 'error');
+      return;
+    }
+
+    const folders = await listAllFiles(
+      token,
+      `'${modelTool.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      'id,name,createdTime'
+    );
+
+    const projects  = getProjects();
+    const knownIds  = new Set(projects.map(p => p.driveFolderId));
+    let   imported  = 0;
+
+    for (const folder of folders) {
+      if (knownIds.has(folder.id)) continue;
+      projects.push({
+        id:              crypto.randomUUID(),
+        name:            folder.name,
+        description:     '',
+        driveFolderId:   folder.id,
+        driveFolderName: folder.name,
+        createdAt:       folder.createdTime ?? new Date().toISOString(),
+      });
+      imported++;
+    }
+
+    if (imported > 0) {
+      saveProjects(projects);
+      toast(`Imported ${imported} project${imported > 1 ? 's' : ''} from Drive`, 'success');
+      rerender();
+    } else {
+      toast('All Drive folders are already linked', 'success');
+    }
+  } catch (err) {
+    toast(`Sync failed: ${err.message}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Sync from Drive'; }
+  }
 }
 
 async function loadModelToolFolders() {
