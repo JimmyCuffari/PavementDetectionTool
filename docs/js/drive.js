@@ -32,7 +32,7 @@ async function driveList(token, q, fields = 'files(id,name)') {
 
 // ── Folder management ──────────────────────────────────────────────────────────
 
-async function findOrCreateFolder(token, name, parentId) {
+export async function findOrCreateFolder(token, name, parentId) {
   const cacheKey = `${parentId}/${name}`;
   if (folderCache.has(cacheKey)) return folderCache.get(cacheKey);
 
@@ -53,11 +53,17 @@ async function findOrCreateFolder(token, name, parentId) {
   return folder;
 }
 
-// Returns { rootId, framesId, labelsId } for a given video name
-export async function ensureFolderPath(token, videoName) {
-  const root = SHARED_FOLDER_ID
-    ? { id: SHARED_FOLDER_ID }
-    : await findOrCreateFolder(token, ROOT_FOLDER_NAME, 'root');
+// Returns { rootId, framesId, labelsId } for a given video name.
+// rootId overrides SHARED_FOLDER_ID when provided (used for project-scoped uploads).
+export async function ensureFolderPath(token, videoName, rootId = null) {
+  let root;
+  if (rootId) {
+    root = { id: rootId };
+  } else if (SHARED_FOLDER_ID) {
+    root = { id: SHARED_FOLDER_ID };
+  } else {
+    root = await findOrCreateFolder(token, ROOT_FOLDER_NAME, 'root');
+  }
   const slug = slugify(videoName.replace(/\.mp4$/i, ''));
   const videoFolder = await findOrCreateFolder(token, slug, root.id);
   const framesFolder = await findOrCreateFolder(token, 'frames', videoFolder.id);
@@ -162,6 +168,41 @@ export async function listAllFiles(token, q, fileFields = 'id,name,mimeType') {
   return allFiles;
 }
 
+// Check if a folder exists without creating it — returns {id,name} or null
+export async function findFolder(token, name, parentId) {
+  const q = `name='${name}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const result = await driveList(token, q, 'files(id,name)');
+  return result.files?.[0] ?? null;
+}
+
+// Permanently delete a file or folder
+export async function deleteFile(token, fileId) {
+  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}`, { method: 'DELETE' });
+  return resp.ok || resp.status === 204;
+}
+
+// Rename a file or folder (metadata-only PATCH)
+export async function renameFile(token, fileId, newName) {
+  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: newName }),
+  });
+  return resp.json();
+}
+
+// Copy a file within Drive to a new parent folder (avoids download+re-upload)
+export async function copyFileToDrive(token, fileId, name, parentId) {
+  return sem(async () => {
+    const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}/copy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, parents: [parentId] }),
+    });
+    return resp.json();
+  });
+}
+
 // Fetch a file's raw content as ArrayBuffer
 export async function downloadFileContent(token, fileId) {
   const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?alt=media`);
@@ -169,48 +210,12 @@ export async function downloadFileContent(token, fileId) {
   return resp.arrayBuffer();
 }
 
-// ── Review decisions (shared across all users) ────────────────────────────────
-
-const REVIEW_DECISIONS_FILE = 'review_decisions.json';
-
-// Returns { decisions: {labelId: {...}}, fileId } — fileId is null if not yet created
-export async function fetchReviewDecisions(token, rootId) {
-  const q = `name='${REVIEW_DECISIONS_FILE}' and '${rootId}' in parents and trashed=false`;
+export async function writeJsonFile(token, folderId, filename, data) {
+  const q = `name='${filename}' and '${folderId}' in parents and trashed=false`;
   const search = await driveList(token, q, 'files(id)');
-  if (!search.files || search.files.length === 0) return { decisions: {}, fileId: null };
-
-  const fileId = search.files[0].id;
-  try {
-    const buf  = await downloadFileContent(token, fileId);
-    const data = JSON.parse(new TextDecoder().decode(buf));
-    return { decisions: (data && typeof data === 'object') ? data : {}, fileId };
-  } catch {
-    return { decisions: {}, fileId };
-  }
-}
-
-// Writes the full decisions map back to Drive. Returns the file's ID.
-export async function saveReviewDecisions(token, rootId, decisions, fileId) {
-  const blob = new Blob([JSON.stringify(decisions, null, 2)], { type: 'application/json' });
-
-  if (!fileId) {
-    const result = await uploadMultipart(token, { name: REVIEW_DECISIONS_FILE, mimeType: 'application/json', parents: [rootId] }, blob);
-    return result.id;
-  }
-
-  const boundary = 'apdd_mp_boundary';
-  const body = new Blob([
-    `--${boundary}\r\nContent-Type: application/json\r\n\r\n{}\r\n`,
-    `--${boundary}\r\nContent-Type: application/json\r\n\r\n`,
-    blob,
-    `\r\n--${boundary}--`,
-  ]);
-  await driveRequest(token, `${DRIVE_UPLOAD}/files/${fileId}?uploadType=multipart`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-    body,
-  });
-  return fileId;
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const existingId = search.files?.[0]?.id ?? null;
+  return upsertFile(token, folderId, filename, 'application/json', blob, existingId);
 }
 
 export async function appendTracking(token, rootId, entry) {

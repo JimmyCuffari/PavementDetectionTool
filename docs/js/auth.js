@@ -11,6 +11,7 @@ let tokenClient = null;
 let currentToken = null;
 let currentUser = null;
 let _onSignedIn = null;
+let _refreshPromise = null;
 
 // Call once after both GIS and GAPI scripts have loaded
 export function initAuth(onSignedIn) {
@@ -52,15 +53,18 @@ export function getUser() { return currentUser; }
 
 // Silently refresh token if it has expired (called automatically by drive.js on 401)
 export async function refreshToken() {
-  return new Promise((resolve) => {
+  if (_refreshPromise) return _refreshPromise;
+  _refreshPromise = new Promise((resolve) => {
     const prev = _onSignedIn;
     _onSignedIn = (user) => {
       _onSignedIn = prev;
+      _refreshPromise = null;
       resolve(currentToken);
       prev(user);
     };
     tokenClient.requestAccessToken({ prompt: '' });
   });
+  return _refreshPromise;
 }
 
 async function fetchUserInfo(token) {

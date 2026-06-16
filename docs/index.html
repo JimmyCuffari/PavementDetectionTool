@@ -8,12 +8,18 @@
   <script src="https://accounts.google.com/gsi/client" async defer onload="window.gisLoaded && window.gisLoaded()"></script>
   <script src="https://apis.google.com/js/api.js" async defer onload="window.gapiLoaded && window.gapiLoaded()"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 </head>
 <body>
 
   <header class="app-header">
     <div class="header-left">
       <span class="app-title">Pavement Dataset Tool</span>
+    </div>
+    <div id="project-switcher" class="project-switcher hidden">
+      <span class="project-switcher-label">Project:</span>
+      <select id="project-select"></select>
     </div>
     <div class="header-right">
       <div id="user-badge" class="user-badge hidden">
@@ -35,26 +41,57 @@
 
   <main id="app" class="app hidden">
     <nav class="tab-nav">
-      <button class="tab-btn active" data-tab="uploader">Upload Labels</button>
-      <button class="tab-btn" data-tab="downloader">Download Dataset</button>
-      <button class="tab-btn hidden" data-tab="reviewer"  id="reviewer-tab-btn">Review Annotations</button>
-      <button class="tab-btn hidden" data-tab="refactor" id="refactor-tab-btn">Refactor Labels</button>
+      <button class="tab-btn active" data-tab="projects">Projects</button>
+      <button class="tab-btn hidden" data-tab="datasets" id="datasets-tab-btn">Datasets</button>
+      <button class="tab-btn hidden" data-tab="train-model" id="train-model-tab-btn">Train Model</button>
+      <button class="tab-btn hidden" data-tab="testing"    id="testing-tab-btn">Testing</button>
     </nav>
 
-    <div id="tab-uploader" class="tab-panel active">
-      <!-- injected by label-uploader.js -->
+    <div id="tab-projects" class="tab-panel active">
+      <!-- injected by project-manager.js -->
     </div>
 
-    <div id="tab-downloader" class="tab-panel hidden">
-      <!-- injected by dataset-downloader.js -->
+    <div id="tab-datasets" class="tab-panel hidden">
+
+      <!-- Active dataset indicator banner -->
+      <div id="dataset-indicator" class="dataset-indicator hidden"></div>
+
+      <nav class="subtab-nav">
+        <button class="subtab-btn active" data-subtab="datasets-mgr">Datasets</button>
+        <button class="subtab-btn hidden" data-subtab="uploader"   id="uploader-subtab-btn">Upload Labels</button>
+        <button class="subtab-btn hidden" data-subtab="downloader" id="downloader-subtab-btn">Download Dataset</button>
+        <button class="subtab-btn hidden" data-subtab="reviewer"   id="reviewer-tab-btn">Review Annotations</button>
+        <button class="subtab-btn hidden" data-subtab="refactor"   id="refactor-tab-btn">Refactor Labels</button>
+      </nav>
+
+      <div id="tab-datasets-mgr" class="subtab-panel">
+        <!-- injected by dataset-manager.js -->
+      </div>
+
+      <div id="tab-uploader" class="subtab-panel hidden">
+        <!-- injected by label-uploader.js -->
+      </div>
+
+      <div id="tab-downloader" class="subtab-panel hidden">
+        <!-- injected by dataset-downloader.js -->
+      </div>
+
+      <div id="tab-reviewer" class="subtab-panel hidden">
+        <!-- injected by annotation-reviewer.js -->
+      </div>
+
+      <div id="tab-refactor" class="subtab-panel hidden">
+        <!-- injected by label-refactor.js -->
+      </div>
+
     </div>
 
-    <div id="tab-reviewer" class="tab-panel hidden">
-      <!-- injected by annotation-reviewer.js -->
+    <div id="tab-train-model" class="tab-panel hidden">
+      <!-- injected by model-trainer.js -->
     </div>
 
-    <div id="tab-refactor" class="tab-panel hidden">
-      <!-- injected by label-refactor.js -->
+    <div id="tab-testing" class="tab-panel hidden">
+      <!-- injected by model-tester.js -->
     </div>
   </main>
 

@@ -1,6 +1,7 @@
 import { getToken, getUser } from './auth.js';
-import { ensureFolderPath, upsertFile, indexFolderFiles, appendTracking, findRootFolder, listAllFiles, fetchReviewDecisions, saveReviewDecisions } from './drive.js';
+import { ensureFolderPath, upsertFile, indexFolderFiles, appendTracking, listAllFiles, downloadFileContent, writeJsonFile } from './drive.js';
 import { collectFilesFromDrop, toast } from './utils.js';
+import { getDatasetRawDataFolder } from './dataset-manager.js';
 
 // Accumulated file pool — persists across drops until Start Over
 let accumImages = new Map(); // basename → File
@@ -168,12 +169,12 @@ function showSummary(inferredName, onUpload) {
 async function populateFolderDropdown(select) {
   const token = getToken();
   if (!token) { select.innerHTML = '<option value="">— sign in to load existing roads —</option>'; return; }
+  const rawDataFolder = await getDatasetRawDataFolder(token);
+  if (!rawDataFolder) { select.innerHTML = '<option value="">— open a project first —</option>'; return; }
   try {
-    const root = await findRootFolder(token);
-    if (!root) { select.innerHTML = '<option value="">— no existing roads found —</option>'; return; }
     const folders = await listAllFiles(
       token,
-      `'${root.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      `'${rawDataFolder.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       'id,name'
     );
     folders.sort((a, b) => a.name.localeCompare(b.name));
@@ -200,10 +201,13 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
   resetBtn.disabled  = true;
   progWrap.classList.remove('hidden');
 
+  const rawDataFolder = await getDatasetRawDataFolder(token);
+  if (!rawDataFolder) { toast('No dataset open', 'error'); return; }
+
   toast('Setting up Drive folders…', 'info');
   let folders;
   try {
-    folders = await ensureFolderPath(token, folderName);
+    folders = await ensureFolderPath(token, folderName, rawDataFolder.id);
   } catch (err) {
     toast(`Drive error: ${err.message}`, 'error');
     uploadBtn.disabled = false;
@@ -221,6 +225,21 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
     ]);
   } catch { /* treat all as new */ }
 
+  let reviewDecisions = {};
+  let clearedAny = false;
+  try {
+    const rdFiles = await listAllFiles(
+      token,
+      `name='review_decisions.json' and '${rawDataFolder.id}' in parents and trashed=false`,
+      'id'
+    );
+    if (rdFiles.length > 0) {
+      const buf    = await downloadFileContent(token, rdFiles[0].id);
+      const parsed = JSON.parse(new TextDecoder().decode(buf));
+      if (parsed && typeof parsed === 'object') reviewDecisions = parsed;
+    }
+  } catch { /* no decisions file — nothing to clear */ }
+
   const total = pairs.length * 2;
   let done = 0, errors = 0;
   const setProgress = (n) => {
@@ -230,7 +249,6 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
     document.getElementById('ul-progress-text').textContent = `Uploading file ${n} of ${total}`;
   };
 
-  const clearedIds = [];
   const uploads = pairs.flatMap(({ image, json }) => [
     async () => {
       const buf = await image.arrayBuffer();
@@ -243,14 +261,21 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
       const text = await json.text();
       await upsertFile(token, folders.labelsId, json.name, 'application/json',
         new Blob([text], { type: 'application/json' }), existingId);
-      if (existingId) clearedIds.push(existingId);
+      if (existingId && existingId in reviewDecisions) {
+        delete reviewDecisions[existingId];
+        clearedAny = true;
+      }
       done++; setProgress(done);
     },
   ]);
 
   await Promise.allSettled(uploads.map(fn => fn().catch(e => { errors++; console.warn(e); })));
 
-  if (clearedIds.length) await clearReviewDecisions(token, folders.rootId, clearedIds);
+  if (clearedAny) {
+    try {
+      await writeJsonFile(token, rawDataFolder.id, 'review_decisions.json', reviewDecisions);
+    } catch (err) { console.warn('Failed to update review decisions:', err); }
+  }
 
   const pairWord  = pairs.length === 1 ? 'pair' : 'pairs';
   const errSuffix = errors ? ` (${errors} errors)` : '';
@@ -278,26 +303,3 @@ function resetUploader() {
   document.getElementById('ul-progress-fill').style.width = '0%';
 }
 
-// When label files are overwritten, reset their review decisions to pending
-// so they show up for re-review rather than staying marked invalid.
-async function clearReviewDecisions(token, rootId, fileIds) {
-  try {
-    const stored = JSON.parse(localStorage.getItem('pavement_review_decisions') ?? '{}');
-    let changed = false;
-    for (const id of fileIds) {
-      if (id in stored) { delete stored[id]; changed = true; }
-    }
-    if (changed) localStorage.setItem('pavement_review_decisions', JSON.stringify(stored));
-  } catch { /* ignore storage errors */ }
-
-  try {
-    const { decisions, fileId } = await fetchReviewDecisions(token, rootId);
-    let changed = false;
-    for (const id of fileIds) {
-      if (id in decisions) { delete decisions[id]; changed = true; }
-    }
-    if (changed) await saveReviewDecisions(token, rootId, decisions, fileId);
-  } catch (err) {
-    console.warn('Failed to update shared review decisions on Drive:', err);
-  }
-}
