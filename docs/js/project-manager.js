@@ -59,6 +59,7 @@ export function renderProjectManager(container, callbacks) {
   _callbacks  = callbacks;
   _container  = container;
   rerender();
+  syncFromDrive();
 }
 
 function rerender() {
@@ -186,8 +187,7 @@ async function syncFromDrive() {
   const token = getToken();
   if (!token) { toast('Not signed in', 'error'); return; }
 
-  btn.disabled    = true;
-  btn.textContent = '↻ Syncing…';
+  if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
 
   try {
     const modelTool = await findFolder(token, ROOT_FOLDER, 'root');

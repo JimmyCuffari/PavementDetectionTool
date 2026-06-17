@@ -1,7 +1,7 @@
 import { getToken, refreshToken } from './auth.js';
 import { findFolder, listAllFiles, upsertFile, deleteFile, renameFile } from './drive.js';
 import { getCurrentProject, getProjectModelsFolder } from './project-manager.js';
-import { getDatasetsForProject } from './dataset-manager.js';
+import { syncAndGetDatasets } from './dataset-manager.js';
 import { makeSemaphore, toast } from './utils.js';
 
 const LAUNCHER_PATH_KEY     = 'pavement_launcher_path';
@@ -1557,7 +1557,7 @@ async function _fetchSplits(select) {
   }
   select.innerHTML = '<option value="">— loading… —</option>';
 
-  const datasets = getDatasetsForProject(project.id);
+  const datasets = await syncAndGetDatasets(token, project);
   if (!datasets.length) {
     select.innerHTML = '<option value="">— no datasets in project —</option>';
     return;

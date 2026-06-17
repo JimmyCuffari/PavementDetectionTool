@@ -12,6 +12,42 @@ export function getDatasetsForProject(projectId) {
   try { return JSON.parse(localStorage.getItem(dsKey(projectId)) ?? '[]'); } catch { return []; }
 }
 
+// Silently syncs the datasets/ folder in Drive into localStorage and returns
+// the up-to-date list. Safe to call from any tool before reading datasets.
+export async function syncAndGetDatasets(token, project) {
+  if (!token || !project) return getDatasetsForProject(project?.id ?? '');
+  try {
+    const datasetsFolder = await getProjectDatasetsFolder(token);
+    if (!datasetsFolder) return getDatasetsForProject(project.id);
+
+    const folders  = await listAllFiles(
+      token,
+      `'${datasetsFolder.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      'id,name,createdTime'
+    );
+    const existing = getDatasetsForProject(project.id);
+    const knownIds = new Set(existing.map(d => d.driveFolderId));
+    let   changed  = false;
+
+    for (const folder of folders) {
+      if (knownIds.has(folder.id)) continue;
+      existing.push({
+        id:            crypto.randomUUID(),
+        name:          folder.name,
+        description:   '',
+        driveFolderId: folder.id,
+        createdAt:     folder.createdTime ?? new Date().toISOString(),
+      });
+      changed = true;
+    }
+
+    if (changed) saveDatasets(project.id, existing);
+    return existing;
+  } catch {
+    return getDatasetsForProject(project.id);
+  }
+}
+
 function saveDatasets(projectId, datasets) {
   localStorage.setItem(dsKey(projectId), JSON.stringify(datasets));
 }
@@ -46,12 +82,16 @@ export function renderDatasetManager(container, callbacks) {
   _callbacks  = callbacks;
   _container  = container;
   rerender();
+  const project = getCurrentProject();
+  if (project) syncDatasetsFromDrive(project);
 }
 
 export function refreshDatasetManager() {
   editingId    = null;
   confirmingId = null;
   rerender();
+  const project = getCurrentProject();
+  if (project) syncDatasetsFromDrive(project);
 }
 
 function rerender() {
@@ -134,38 +174,14 @@ async function syncDatasetsFromDrive(project) {
   const token = getToken();
   if (!token) { toast('Not signed in', 'error'); return; }
 
-  btn.disabled    = true;
-  btn.textContent = '↻ Syncing…';
+  if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
 
   try {
-    const datasetsFolder = await getProjectDatasetsFolder(token);
-    if (!datasetsFolder) throw new Error('Could not access datasets folder in Drive');
-
-    const folders = await listAllFiles(
-      token,
-      `'${datasetsFolder.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      'id,name,createdTime'
-    );
-
-    const existing  = getDatasetsForProject(project.id);
-    const knownIds  = new Set(existing.map(d => d.driveFolderId));
-    let   imported  = 0;
-
-    for (const folder of folders) {
-      if (knownIds.has(folder.id)) continue;
-      existing.push({
-        id:            crypto.randomUUID(),
-        name:          folder.name,
-        description:   '',
-        driveFolderId: folder.id,
-        createdAt:     folder.createdTime ?? new Date().toISOString(),
-      });
-      imported++;
-    }
-
-    if (imported > 0) {
-      saveDatasets(project.id, existing);
-      toast(`Imported ${imported} dataset${imported > 1 ? 's' : ''} from Drive`, 'success');
+    const before  = getDatasetsForProject(project.id).length;
+    const updated = await syncAndGetDatasets(token, project);
+    const added   = updated.length - before;
+    if (added > 0) {
+      toast(`Imported ${added} dataset${added > 1 ? 's' : ''} from Drive`, 'success');
       rerender();
     } else {
       toast('All Drive folders are already linked', 'success');
