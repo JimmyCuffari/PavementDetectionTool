@@ -585,6 +585,11 @@ input[type="color"].rv-color-pick::-webkit-color-swatch { border: none; border-r
   color: var(--text-dim);
   white-space: nowrap;
 }
+.sync-timestamp {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 #project-select {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -1095,3 +1100,11 @@ input[type="color"].rv-color-pick::-webkit-color-swatch { border: none; border-r
   font-size:13px; }
 .mm-row-selected td { background:rgba(0,122,204,.08); }
 @media (max-width:700px) { .mm-cmp-grid { grid-template-columns:1fr; } }
+
+/* ── Process Data ─────────────────────────────────────────────────────────── */
+.pd-panel               { padding: 1.25rem; }
+.pd-hidden              { display: none !important; }
+.pd-placeholder         { padding:1.5rem; text-align:center; color:var(--text-dim); border:2px dashed var(--border); border-radius:var(--radius); margin-bottom:1.5rem; }
+.pd-placeholder-icon    { font-size:1.5rem; margin-bottom:0.5rem; }
+.pd-placeholder-title   { font-weight:600; margin-bottom:0.25rem; color:var(--text); }
+.pd-placeholder-sub     { font-size:12px; }

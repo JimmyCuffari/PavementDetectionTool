@@ -41,7 +41,11 @@ export async function syncAndGetDatasets(token, project) {
       changed = true;
     }
 
-    if (changed) saveDatasets(project.id, existing);
+    if (changed) {
+      saveDatasets(project.id, existing);
+      localStorage.setItem('pavement_tool_last_sync', new Date().toISOString());
+      window.dispatchEvent(new CustomEvent('drive-synced'));
+    }
     return existing;
   } catch {
     return getDatasetsForProject(project.id);
