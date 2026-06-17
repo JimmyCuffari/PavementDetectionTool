@@ -1,5 +1,5 @@
 import { getToken } from './auth.js';
-import { findOrCreateFolder, findFolder, deleteFile, renameFile } from './drive.js';
+import { findOrCreateFolder, findFolder, deleteFile, renameFile, listAllFiles } from './drive.js';
 import { toast } from './utils.js';
 import { getCurrentProject, getProjectDatasetsFolder } from './project-manager.js';
 
@@ -69,7 +69,10 @@ function rerender() {
     <div style="max-width:640px;">
       <div class="flex-row" style="justify-content:space-between;align-items:center;margin-bottom:1.25rem;">
         <p class="section-title" style="margin:0;">Datasets — ${escHtml(project.name)}</p>
-        <button class="btn btn-primary btn-sm" id="dm-new-btn">+ New Dataset</button>
+        <div class="flex-row" style="gap:0.5rem;">
+          <button class="btn btn-ghost btn-sm" id="dm-sync-btn" title="Re-import datasets from Drive">↻ Sync from Drive</button>
+          <button class="btn btn-primary btn-sm" id="dm-new-btn">+ New Dataset</button>
+        </div>
       </div>
 
       <div id="dm-form" class="pm-form hidden">
@@ -108,6 +111,8 @@ function rerender() {
 // ── Form wiring ────────────────────────────────────────────────────────────────
 
 function wireForm(project) {
+  document.getElementById('dm-sync-btn').addEventListener('click', () => syncDatasetsFromDrive(project));
+
   document.getElementById('dm-new-btn').addEventListener('click', () => {
     document.getElementById('dm-form').classList.toggle('hidden');
   });
@@ -120,6 +125,56 @@ function wireForm(project) {
   document.getElementById('dm-name-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') createDataset(project);
   });
+}
+
+// ── Sync from Drive ────────────────────────────────────────────────────────────
+
+async function syncDatasetsFromDrive(project) {
+  const btn   = document.getElementById('dm-sync-btn');
+  const token = getToken();
+  if (!token) { toast('Not signed in', 'error'); return; }
+
+  btn.disabled    = true;
+  btn.textContent = '↻ Syncing…';
+
+  try {
+    const datasetsFolder = await getProjectDatasetsFolder(token);
+    if (!datasetsFolder) throw new Error('Could not access datasets folder in Drive');
+
+    const folders = await listAllFiles(
+      token,
+      `'${datasetsFolder.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      'id,name,createdTime'
+    );
+
+    const existing  = getDatasetsForProject(project.id);
+    const knownIds  = new Set(existing.map(d => d.driveFolderId));
+    let   imported  = 0;
+
+    for (const folder of folders) {
+      if (knownIds.has(folder.id)) continue;
+      existing.push({
+        id:            crypto.randomUUID(),
+        name:          folder.name,
+        description:   '',
+        driveFolderId: folder.id,
+        createdAt:     folder.createdTime ?? new Date().toISOString(),
+      });
+      imported++;
+    }
+
+    if (imported > 0) {
+      saveDatasets(project.id, existing);
+      toast(`Imported ${imported} dataset${imported > 1 ? 's' : ''} from Drive`, 'success');
+      rerender();
+    } else {
+      toast('All Drive folders are already linked', 'success');
+    }
+  } catch (err) {
+    toast(`Sync failed: ${err.message}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Sync from Drive'; }
+  }
 }
 
 // ── Create ─────────────────────────────────────────────────────────────────────

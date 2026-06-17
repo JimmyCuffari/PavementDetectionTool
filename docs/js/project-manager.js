@@ -6,7 +6,7 @@ const DS_ACTIVE_KEY = 'pavement_tool_active_dataset';
 
 const PROJECTS_KEY = 'pavement_tool_projects';
 const ACTIVE_KEY   = 'pavement_tool_active_project';
-const ROOT_FOLDER  = 'ModelTool';
+const ROOT_FOLDER  = 'PavementDataset';
 
 // ── Persistent state ───────────────────────────────────────────────────────────
 
@@ -70,7 +70,7 @@ function rerender() {
       <div class="flex-row" style="justify-content:space-between;align-items:center;margin-bottom:1.25rem;">
         <p class="section-title" style="margin:0;">Projects</p>
         <div class="flex-row" style="gap:0.5rem;">
-          <button class="btn btn-ghost btn-sm" id="pm-sync-btn" title="Re-import projects from ModelTool folder in Drive">↻ Sync from Drive</button>
+          <button class="btn btn-ghost btn-sm" id="pm-sync-btn" title="Re-import projects from PavementDataset folder in Drive">↻ Sync from Drive</button>
           <button class="btn btn-primary btn-sm" id="pm-new-btn">+ New Project</button>
         </div>
       </div>
@@ -101,7 +101,7 @@ function rerender() {
         </div>
 
         <div id="pm-existing-row" class="folder-input-row hidden" style="margin-bottom:0.6rem;">
-          <label style="white-space:nowrap;min-width:120px;">ModelTool folder:</label>
+          <label style="white-space:nowrap;min-width:120px;">PavementDataset folder:</label>
           <select id="pm-folder-select"
             style="flex:1;padding:0.4rem 0.6rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:var(--font);font-size:13px;">
             <option value="">— loading… —</option>
@@ -110,7 +110,7 @@ function rerender() {
         </div>
 
         <p class="text-dim" id="pm-form-hint" style="font-size:12px;margin-bottom:0.75rem;">
-          A folder named after this project will be created inside <strong style="color:var(--text);">ModelTool</strong>.
+          A folder named after this project will be created inside <strong style="color:var(--text);">PavementDataset</strong>.
         </p>
 
         <div class="flex-row" style="gap:0.5rem;">
@@ -151,7 +151,7 @@ function wireForm() {
     if (e.key === 'Enter') createProject();
   });
 
-  document.getElementById('pm-refresh-folders').addEventListener('click', loadModelToolFolders);
+  document.getElementById('pm-refresh-folders').addEventListener('click', loadPavementDatasetFolders);
 
   _container.querySelectorAll('input[name="pm-folder-mode"]').forEach(radio => {
     radio.addEventListener('change', onFolderModeChange);
@@ -170,15 +170,15 @@ function onFolderModeChange(e) {
   const isExisting = e.target.value === 'existing';
   document.getElementById('pm-existing-row').classList.toggle('hidden', !isExisting);
   updateFormHint(e.target.value);
-  if (isExisting) loadModelToolFolders();
+  if (isExisting) loadPavementDatasetFolders();
 }
 
 function updateFormHint(mode) {
   const hint = document.getElementById('pm-form-hint');
   if (!hint) return;
   hint.innerHTML = mode === 'new'
-    ? `A folder named after this project will be created inside <strong style="color:var(--text);">ModelTool</strong>.`
-    : `The project will be linked to the selected folder inside <strong style="color:var(--text);">ModelTool</strong>.`;
+    ? `A folder named after this project will be created inside <strong style="color:var(--text);">PavementDataset</strong>.`
+    : `The project will be linked to the selected folder inside <strong style="color:var(--text);">PavementDataset</strong>.`;
 }
 
 async function syncFromDrive() {
@@ -192,7 +192,7 @@ async function syncFromDrive() {
   try {
     const modelTool = await findFolder(token, ROOT_FOLDER, 'root');
     if (!modelTool) {
-      toast('ModelTool folder not found in Drive', 'error');
+      toast('PavementDataset folder not found in Drive', 'error');
       return;
     }
 
@@ -233,7 +233,7 @@ async function syncFromDrive() {
   }
 }
 
-async function loadModelToolFolders() {
+async function loadPavementDatasetFolders() {
   const select = document.getElementById('pm-folder-select');
   if (!select) return;
   select.innerHTML = '<option value="">— loading… —</option>';
@@ -242,7 +242,7 @@ async function loadModelToolFolders() {
   try {
     const modelTool = await findFolder(token, ROOT_FOLDER, 'root');
     if (!modelTool) {
-      select.innerHTML = `<option value="">— ModelTool folder not found in Drive —</option>`;
+      select.innerHTML = `<option value="">— PavementDataset folder not found in Drive —</option>`;
       return;
     }
     const folders = await listAllFiles(
@@ -279,14 +279,14 @@ async function createProject() {
   try {
     let driveFolderId, driveFolderName;
 
-    // Ensure ModelTool exists (always needed)
+    // Ensure PavementDataset exists (always needed)
     const modelTool = await findOrCreateFolder(token, ROOT_FOLDER, 'root');
 
     if (mode === 'new') {
       // Block if folder already exists
       const existing = await findFolder(token, name, modelTool.id);
       if (existing) {
-        toast(`A folder named "${name}" already exists in ModelTool`, 'error');
+        toast(`A folder named "${name}" already exists in PavementDataset`, 'error');
         btn.disabled    = false;
         btn.textContent = 'Create Project';
         return;
@@ -357,12 +357,12 @@ async function saveEdit(id) {
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
 
   try {
-    // Check for name conflict in ModelTool
+    // Check for name conflict in PavementDataset
     const modelTool = await findFolder(token, ROOT_FOLDER, 'root');
     if (modelTool) {
       const conflict = await findFolder(token, newName, modelTool.id);
       if (conflict && conflict.id !== project.driveFolderId) {
-        toast(`A folder named "${newName}" already exists in ModelTool`, 'error');
+        toast(`A folder named "${newName}" already exists in PavementDataset`, 'error');
         if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
         return;
       }
@@ -453,7 +453,7 @@ function projectCardHtml(p, activeId) {
         <div class="pm-card-info">
           <div class="pm-card-name">Delete "${escHtml(p.name)}"?</div>
           <div class="pm-confirm-text">
-            This will permanently delete <strong>ModelTool/${escHtml(p.driveFolderName)}</strong>
+            This will permanently delete <strong>PavementDataset/${escHtml(p.driveFolderName)}</strong>
             and all its contents from Google Drive. This cannot be undone.
           </div>
         </div>
@@ -472,7 +472,7 @@ function projectCardHtml(p, activeId) {
           ${isActive ? '<span class="pm-badge-active">Active</span>' : ''}
         </div>
         ${p.description ? `<div class="pm-card-desc">${escHtml(p.description)}</div>` : ''}
-        <div class="pm-card-meta">Drive: ModelTool / ${escHtml(p.driveFolderName)}</div>
+        <div class="pm-card-meta">Drive: PavementDataset / ${escHtml(p.driveFolderName)}</div>
         <div class="pm-card-meta">Created: ${new Date(p.createdAt).toLocaleDateString()}</div>
       </div>
       <div class="pm-card-actions">
