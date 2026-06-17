@@ -21,6 +21,7 @@
       <span class="project-switcher-label">Project:</span>
       <select id="project-select"></select>
     </div>
+    <span id="sync-timestamp" class="sync-timestamp hidden"></span>
     <div class="header-right">
       <div id="user-badge" class="user-badge hidden">
         <img id="user-avatar" src="" alt="avatar" />
@@ -45,6 +46,7 @@
       <button class="tab-btn hidden" data-tab="datasets" id="datasets-tab-btn">Datasets</button>
       <button class="tab-btn hidden" data-tab="train-model" id="train-model-tab-btn">Train Model</button>
       <button class="tab-btn hidden" data-tab="testing"    id="testing-tab-btn">Testing</button>
+      <button class="tab-btn hidden" data-tab="process-data" id="process-data-tab-btn">Process Data</button>
     </nav>
 
     <div id="tab-projects" class="tab-panel active">
@@ -92,6 +94,10 @@
 
     <div id="tab-testing" class="tab-panel hidden">
       <!-- injected by model-tester.js -->
+    </div>
+
+    <div id="tab-process-data" class="tab-panel hidden">
+      <!-- injected by process-data.js -->
     </div>
   </main>
 

@@ -59,8 +59,9 @@ export function renderProjectManager(container, callbacks) {
   _callbacks  = callbacks;
   _container  = container;
   rerender();
-  syncFromDrive();
 }
+
+export { syncFromDrive };
 
 function rerender() {
   const projects = getProjects();
@@ -226,11 +227,17 @@ async function syncFromDrive() {
     } else {
       toast('All Drive folders are already linked', 'success');
     }
+    recordSync();
   } catch (err) {
     toast(`Sync failed: ${err.message}`, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '↻ Sync from Drive'; }
   }
+}
+
+function recordSync() {
+  localStorage.setItem('pavement_tool_last_sync', new Date().toISOString());
+  window.dispatchEvent(new CustomEvent('drive-synced'));
 }
 
 async function loadPavementDatasetFolders() {

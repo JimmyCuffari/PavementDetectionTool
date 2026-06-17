@@ -6,11 +6,13 @@ import { renderReviewer }   from './annotation-reviewer.js';
 import { renderRefactor }   from './label-refactor.js';
 import { renderTrainer }    from './model-trainer.js';
 import { renderTester }     from './model-tester.js';
+import { renderProcessData } from './process-data.js';
 import {
   renderProjectManager,
   getCurrentProject,
   setCurrentProject,
   getProjects,
+  syncFromDrive,
 } from './project-manager.js';
 import {
   renderDatasetManager,
@@ -19,6 +21,23 @@ import {
 } from './dataset-manager.js';
 
 let isMasterUser = false;
+
+window.addEventListener('drive-synced', () => {
+  updateProjectSwitcher();
+  updateSyncTimestamp();
+});
+
+function updateSyncTimestamp() {
+  const el  = document.getElementById('sync-timestamp');
+  if (!el) return;
+  const iso = localStorage.getItem('pavement_tool_last_sync');
+  if (!iso) { el.textContent = ''; return; }
+  const d   = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const isToday = d.toDateString() === new Date().toDateString();
+  el.textContent = `Synced ${isToday ? time : date + ' ' + time}`;
+}
 
 await waitForGoogleAPIs();
 
@@ -56,6 +75,7 @@ document.getElementById('project-select').addEventListener('change', (e) => {
     refreshDatasetManager();
     document.getElementById('train-model-tab-btn')?.classList.remove('hidden');
     document.getElementById('testing-tab-btn')?.classList.remove('hidden');
+    document.getElementById('process-data-tab-btn')?.classList.remove('hidden');
     switchTab('projects');
   }
 });
@@ -65,6 +85,7 @@ renderProjectManager(document.getElementById('tab-projects'), {
     document.getElementById('datasets-tab-btn').classList.remove('hidden');
     document.getElementById('train-model-tab-btn')?.classList.remove('hidden');
     document.getElementById('testing-tab-btn')?.classList.remove('hidden');
+    document.getElementById('process-data-tab-btn')?.classList.remove('hidden');
     updateProjectSwitcher();
     hideToolSubtabs();
     updateDatasetIndicator();
@@ -78,6 +99,7 @@ renderProjectManager(document.getElementById('tab-projects'), {
       document.getElementById('datasets-tab-btn').classList.add('hidden');
       document.getElementById('train-model-tab-btn')?.classList.add('hidden');
       document.getElementById('testing-tab-btn')?.classList.add('hidden');
+      document.getElementById('process-data-tab-btn')?.classList.add('hidden');
       switchTab('projects');
     }
     hideToolSubtabs();
@@ -105,6 +127,7 @@ renderReviewer(document.getElementById('tab-reviewer'));
 renderRefactor(document.getElementById('tab-refactor'));
 renderTrainer(document.getElementById('tab-train-model'));
 renderTester(document.getElementById('tab-testing'));
+renderProcessData(document.getElementById('tab-process-data'));
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
@@ -125,6 +148,7 @@ function onSignedIn(user) {
     document.getElementById('datasets-tab-btn').classList.remove('hidden');
     document.getElementById('train-model-tab-btn')?.classList.remove('hidden');
     document.getElementById('testing-tab-btn')?.classList.remove('hidden');
+    document.getElementById('process-data-tab-btn')?.classList.remove('hidden');
     // Restore dataset if one was active
     const savedDataset = getCurrentDataset();
     if (savedDataset) {
@@ -137,8 +161,12 @@ function onSignedIn(user) {
     document.getElementById('refactor-tab-btn')?.classList.remove('hidden');
   }
 
+  document.getElementById('sync-timestamp').classList.remove('hidden');
+
   updateProjectSwitcher();
   updateDatasetIndicator();
+  updateSyncTimestamp();
+  syncFromDrive();
 }
 
 function showAuthWall() {
