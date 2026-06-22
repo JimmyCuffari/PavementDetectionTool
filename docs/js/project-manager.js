@@ -1,5 +1,6 @@
 import { getToken } from './auth.js';
-import { findOrCreateFolder, findFolder, deleteFile, renameFile, listAllFiles } from './drive.js';
+import { findOrCreateFolder, findFolder, findRootFolder, deleteFile, renameFile, listAllFiles } from './drive.js';
+import { SHARED_FOLDER_ID } from './config.js';
 import { toast } from './utils.js';
 
 const DS_ACTIVE_KEY = 'pavement_tool_active_dataset';
@@ -7,6 +8,11 @@ const DS_ACTIVE_KEY = 'pavement_tool_active_dataset';
 const PROJECTS_KEY = 'pavement_tool_projects';
 const ACTIVE_KEY   = 'pavement_tool_active_project';
 const ROOT_FOLDER  = 'PavementDataset';
+
+async function getRootFolder(token) {
+  if (SHARED_FOLDER_ID) return { id: SHARED_FOLDER_ID, name: ROOT_FOLDER };
+  return findRootFolder(token);
+}
 
 // ── Persistent state ───────────────────────────────────────────────────────────
 
@@ -191,15 +197,15 @@ async function syncFromDrive() {
   if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
 
   try {
-    const modelTool = await findFolder(token, ROOT_FOLDER, 'root');
-    if (!modelTool) {
+    const rootFolder = await getRootFolder(token);
+    if (!rootFolder) {
       toast('PavementDataset folder not found in Drive', 'error');
       return;
     }
 
     const folders = await listAllFiles(
       token,
-      `'${modelTool.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      `'${rootFolder.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       'id,name,createdTime'
     );
 
@@ -247,14 +253,14 @@ async function loadPavementDatasetFolders() {
   const token = getToken();
   if (!token) { select.innerHTML = '<option value="">— sign in first —</option>'; return; }
   try {
-    const modelTool = await findFolder(token, ROOT_FOLDER, 'root');
-    if (!modelTool) {
+    const rootFolder = await getRootFolder(token);
+    if (!rootFolder) {
       select.innerHTML = `<option value="">— PavementDataset folder not found in Drive —</option>`;
       return;
     }
     const folders = await listAllFiles(
       token,
-      `'${modelTool.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      `'${rootFolder.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       'id,name'
     );
     folders.sort((a, b) => a.name.localeCompare(b.name));
@@ -287,18 +293,18 @@ async function createProject() {
     let driveFolderId, driveFolderName;
 
     // Ensure PavementDataset exists (always needed)
-    const modelTool = await findOrCreateFolder(token, ROOT_FOLDER, 'root');
+    const rootFolder = await getRootFolder(token) ?? await findOrCreateFolder(token, ROOT_FOLDER, 'root');
 
     if (mode === 'new') {
       // Block if folder already exists
-      const existing = await findFolder(token, name, modelTool.id);
+      const existing = await findFolder(token, name, rootFolder.id);
       if (existing) {
         toast(`A folder named "${name}" already exists in PavementDataset`, 'error');
         btn.disabled    = false;
         btn.textContent = 'Create Project';
         return;
       }
-      const newFolder  = await findOrCreateFolder(token, name, modelTool.id);
+      const newFolder  = await findOrCreateFolder(token, name, rootFolder.id);
       driveFolderId    = newFolder.id;
       driveFolderName  = name;
     } else {
@@ -365,9 +371,9 @@ async function saveEdit(id) {
 
   try {
     // Check for name conflict in PavementDataset
-    const modelTool = await findFolder(token, ROOT_FOLDER, 'root');
-    if (modelTool) {
-      const conflict = await findFolder(token, newName, modelTool.id);
+    const rootFolder = await getRootFolder(token);
+    if (rootFolder) {
+      const conflict = await findFolder(token, newName, rootFolder.id);
       if (conflict && conflict.id !== project.driveFolderId) {
         toast(`A folder named "${newName}" already exists in PavementDataset`, 'error');
         if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
