@@ -25,7 +25,7 @@ async function driveRequest(token, url, options = {}) {
 }
 
 async function driveList(token, q, fields = 'files(id,name)') {
-  const params = new URLSearchParams({ q, fields, pageSize: 50 });
+  const params = new URLSearchParams({ q, fields, pageSize: 50, supportsAllDrives: true, includeItemsFromAllDrives: true });
   const resp = await driveRequest(token, `${DRIVE_API}/files?${params}`);
   return resp.json();
 }
@@ -83,7 +83,7 @@ export async function uploadMultipart(token, metadata, blob) {
 
   if (blob === null) {
     // Folder creation — no file body needed, use regular JSON endpoint
-    const resp = await driveRequest(token, `${DRIVE_API}/files`, {
+    const resp = await driveRequest(token, `${DRIVE_API}/files?supportsAllDrives=true`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: metaJson,
@@ -102,7 +102,7 @@ export async function uploadMultipart(token, metadata, blob) {
 
   const resp = await driveRequest(
     token,
-    `${DRIVE_UPLOAD}/files?uploadType=multipart`,
+    `${DRIVE_UPLOAD}/files?uploadType=multipart&supportsAllDrives=true`,
     { method: 'POST', headers: { 'Content-Type': contentType }, body }
   );
   return resp.json();
@@ -134,7 +134,7 @@ export function upsertFile(token, folderId, filename, mimeType, blob, existingId
       blob,
       `\r\n--${boundary}--`,
     ]);
-    const resp = await driveRequest(token, `${DRIVE_UPLOAD}/files/${existingId}?uploadType=multipart`, {
+    const resp = await driveRequest(token, `${DRIVE_UPLOAD}/files/${existingId}?uploadType=multipart&supportsAllDrives=true`, {
       method: 'PATCH',
       headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
       body,
@@ -158,7 +158,7 @@ export async function listAllFiles(token, q, fileFields = 'id,name,mimeType') {
   const allFiles = [];
   let pageToken = null;
   do {
-    const params = new URLSearchParams({ q, fields: `nextPageToken,files(${fileFields})`, pageSize: 1000 });
+    const params = new URLSearchParams({ q, fields: `nextPageToken,files(${fileFields})`, pageSize: 1000, supportsAllDrives: true, includeItemsFromAllDrives: true });
     if (pageToken) params.set('pageToken', pageToken);
     const resp = await driveRequest(token, `${DRIVE_API}/files?${params}`);
     const data = await resp.json();
@@ -177,13 +177,13 @@ export async function findFolder(token, name, parentId) {
 
 // Permanently delete a file or folder
 export async function deleteFile(token, fileId) {
-  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}`, { method: 'DELETE' });
+  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?supportsAllDrives=true`, { method: 'DELETE' });
   return resp.ok || resp.status === 204;
 }
 
 // Rename a file or folder (metadata-only PATCH)
 export async function renameFile(token, fileId, newName) {
-  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}`, {
+  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?supportsAllDrives=true`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: newName }),
@@ -194,7 +194,7 @@ export async function renameFile(token, fileId, newName) {
 // Copy a file within Drive to a new parent folder (avoids download+re-upload)
 export async function copyFileToDrive(token, fileId, name, parentId) {
   return sem(async () => {
-    const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}/copy`, {
+    const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}/copy?supportsAllDrives=true`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, parents: [parentId] }),
@@ -205,7 +205,7 @@ export async function copyFileToDrive(token, fileId, name, parentId) {
 
 // Fetch a file's raw content as ArrayBuffer
 export async function downloadFileContent(token, fileId) {
-  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?alt=media`);
+  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?alt=media&supportsAllDrives=true`);
   if (!resp.ok) throw new Error(`${resp.status}`);
   return resp.arrayBuffer();
 }
@@ -229,7 +229,7 @@ export async function appendTracking(token, rootId, entry) {
   if (search.files && search.files.length > 0) {
     const fileId = search.files[0].id;
     try {
-      const mediaResp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?alt=media`);
+      const mediaResp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?alt=media&supportsAllDrives=true`);
       const existing = await mediaResp.json();
       if (Array.isArray(existing)) entries = [...existing, newEntry];
     } catch { /* start fresh if file is corrupt */ }
@@ -244,7 +244,7 @@ export async function appendTracking(token, rootId, entry) {
       blob,
       `\r\n--${boundary}--`,
     ]);
-    await driveRequest(token, `${DRIVE_UPLOAD}/files/${fileId}?uploadType=multipart`, {
+    await driveRequest(token, `${DRIVE_UPLOAD}/files/${fileId}?uploadType=multipart&supportsAllDrives=true`, {
       method: 'PATCH',
       headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
       body,
