@@ -69,7 +69,10 @@ export function renderReviewer(container) {
         <div class="rv-nav">
           <button class="btn btn-ghost btn-sm" id="rv-prev">&#8592; Prev</button>
           <span id="rv-item-label" class="text-dim" style="font-size:13px;"></span>
-          <button class="btn btn-ghost btn-sm" id="rv-next">Next &#8594;</button>
+          <div class="flex-row" style="gap:0.5rem;">
+            <button class="btn btn-ghost btn-sm" id="rv-next-unrated">Next Unrated &#8594;</button>
+            <button class="btn btn-ghost btn-sm" id="rv-next">Next &#8594;</button>
+          </div>
         </div>
 
         <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-bottom:0.3rem;">
@@ -141,6 +144,7 @@ export function renderReviewer(container) {
           <div class="rv-fs-group">
             <button class="btn btn-ghost btn-sm" id="rv-fs-prev">&#8592; Prev</button>
             <span id="rv-fs-label" style="font-size:13px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;"></span>
+            <button class="btn btn-ghost btn-sm" id="rv-fs-next-unrated">Next Unrated &#8594;</button>
             <button class="btn btn-ghost btn-sm" id="rv-fs-next">Next &#8594;</button>
           </div>
           <div class="rv-fs-group">
@@ -305,8 +309,9 @@ function initReviewUI(token) {
   const firstPending = items.findIndex(it => getStatus(it) === 'pending');
   if (firstPending >= 0) currentIdx = firstPending;
 
-  document.getElementById('rv-prev').onclick        = () => navigate(-1, token);
-  document.getElementById('rv-next').onclick        = () => navigate(1, token);
+  document.getElementById('rv-prev').onclick         = () => navigate(-1, token);
+  document.getElementById('rv-next').onclick         = () => navigate(1, token);
+  document.getElementById('rv-next-unrated').onclick = () => goToNextUnrated(token);
   document.getElementById('rv-valid-btn').onclick   = () => markDecision('valid', token);
   document.getElementById('rv-invalid-btn').onclick = () => markDecision('invalid', token);
   document.getElementById('rv-note').oninput        = saveCurrentNote;
@@ -315,8 +320,9 @@ function initReviewUI(token) {
   document.getElementById('rv-toggle-ann').onclick     = toggleAnnotations;
   document.getElementById('rv-maximize-btn').onclick   = enterFullscreen;
 
-  document.getElementById('rv-fs-prev').onclick        = () => navigate(-1, token);
-  document.getElementById('rv-fs-next').onclick        = () => navigate(1, token);
+  document.getElementById('rv-fs-prev').onclick         = () => navigate(-1, token);
+  document.getElementById('rv-fs-next').onclick         = () => navigate(1, token);
+  document.getElementById('rv-fs-next-unrated').onclick = () => goToNextUnrated(token);
   document.getElementById('rv-fs-valid-btn').onclick   = () => markDecision('valid', token);
   document.getElementById('rv-fs-invalid-btn').onclick = () => markDecision('invalid', token);
   document.getElementById('rv-fs-toggle-ann').onclick  = toggleAnnotations;
@@ -347,6 +353,18 @@ function handleKey(e, token) {
 function navigate(delta, token) {
   currentIdx = Math.max(0, Math.min(items.length - 1, currentIdx + delta));
   renderItem(token);
+}
+
+function goToNextUnrated(token) {
+  for (let i = 1; i <= items.length; i++) {
+    const idx = (currentIdx + i) % items.length;
+    if (getStatus(items[idx]) === 'pending') {
+      currentIdx = idx;
+      renderItem(token);
+      return;
+    }
+  }
+  toast('No unrated items left', 'success');
 }
 
 // ── Render current item ───────────────────────────────────────────────────────
