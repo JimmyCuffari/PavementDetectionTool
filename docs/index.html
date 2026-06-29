@@ -1,16 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Pavement Dataset Tool</title>
   <link rel="stylesheet" href="css/app.css" />
-  <script src="https://accounts.google.com/gsi/client" async defer onload="window.gisLoaded && window.gisLoaded()"></script>
-  <script src="https://apis.google.com/js/api.js" async defer onload="window.gapiLoaded && window.gapiLoaded()"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer
+    onload="window.gisLoaded && window.gisLoaded()"></script>
+  <script src="https://apis.google.com/js/api.js" async defer
+    onload="window.gapiLoaded && window.gapiLoaded()"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+  <script
+    src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 </head>
+
 <body>
 
   <header class="app-header">
@@ -45,7 +50,7 @@
       <button class="tab-btn active" data-tab="projects">Projects</button>
       <button class="tab-btn hidden" data-tab="datasets" id="datasets-tab-btn">Datasets</button>
       <button class="tab-btn hidden" data-tab="train-model" id="train-model-tab-btn">Train Model</button>
-      <button class="tab-btn hidden" data-tab="testing"    id="testing-tab-btn">Testing</button>
+      <button class="tab-btn hidden" data-tab="testing" id="testing-tab-btn">Testing</button>
       <button class="tab-btn hidden" data-tab="process-data" id="process-data-tab-btn">Process Data</button>
     </nav>
 
@@ -60,10 +65,10 @@
 
       <nav class="subtab-nav">
         <button class="subtab-btn active" data-subtab="datasets-mgr">Datasets</button>
-        <button class="subtab-btn hidden" data-subtab="uploader"   id="uploader-subtab-btn">Upload Labels</button>
+        <button class="subtab-btn hidden" data-subtab="uploader" id="uploader-subtab-btn">Upload Labels</button>
         <button class="subtab-btn hidden" data-subtab="downloader" id="downloader-subtab-btn">Download Dataset</button>
-        <button class="subtab-btn hidden" data-subtab="reviewer"   id="reviewer-tab-btn">Review Annotations</button>
-        <button class="subtab-btn hidden" data-subtab="refactor"   id="refactor-tab-btn">Refactor Labels</button>
+        <button class="subtab-btn hidden" data-subtab="reviewer" id="reviewer-tab-btn">Review Annotations</button>
+        <button class="subtab-btn hidden" data-subtab="refactor" id="refactor-tab-btn">Refactor Labels</button>
       </nav>
 
       <div id="tab-datasets-mgr" class="subtab-panel">
@@ -105,4 +110,5 @@
 
   <script type="module" src="js/app.js"></script>
 </body>
+
 </html>
