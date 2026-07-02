@@ -209,13 +209,16 @@ async function syncFromDrive() {
       'id,name,createdTime'
     );
 
-    const projects  = getProjects();
-    const knownIds  = new Set(projects.map(p => p.driveFolderId));
+    const driveIds  = new Set(folders.map(f => f.id));
+    const existing  = getProjects();
+    const kept      = existing.filter(p => driveIds.has(p.driveFolderId));
+    const removed   = existing.length - kept.length;
+    const knownIds  = new Set(kept.map(p => p.driveFolderId));
     let   imported  = 0;
 
     for (const folder of folders) {
       if (knownIds.has(folder.id)) continue;
-      projects.push({
+      kept.push({
         id:              crypto.randomUUID(),
         name:            folder.name,
         description:     '',
@@ -226,12 +229,23 @@ async function syncFromDrive() {
       imported++;
     }
 
-    if (imported > 0) {
-      saveProjects(projects);
-      toast(`Imported ${imported} project${imported > 1 ? 's' : ''} from Drive`, 'success');
+    if (imported > 0 || removed > 0) {
+      saveProjects(kept);
+
+      const activeId = localStorage.getItem(ACTIVE_KEY);
+      if (activeId && !kept.find(p => p.id === activeId)) {
+        localStorage.removeItem(ACTIVE_KEY);
+        localStorage.removeItem(DS_ACTIVE_KEY);
+        _callbacks.onProjectChange?.();
+      }
+
+      const parts = [];
+      if (imported > 0) parts.push(`imported ${imported}`);
+      if (removed  > 0) parts.push(`removed ${removed}`);
+      toast(`Sync complete: ${parts.join(', ')} project${imported + removed > 1 ? 's' : ''}`, 'success');
       rerender();
     } else {
-      toast('All Drive folders are already linked', 'success');
+      toast('Projects are up to date with Drive', 'success');
     }
     recordSync();
   } catch (err) {
@@ -364,7 +378,19 @@ async function saveEdit(id) {
   const project  = projects.find(p => p.id === id);
   if (!project) return;
 
-  if (newName === project.name) { editingId = null; rerender(); return; }
+  const nameChanged = newName !== project.name;
+  const descChanged = newDesc !== (project.description ?? '');
+
+  if (!nameChanged && !descChanged) { editingId = null; rerender(); return; }
+
+  if (!nameChanged) {
+    project.description = newDesc;
+    saveProjects(projects);
+    toast('Project updated', 'success');
+    editingId = null;
+    rerender();
+    return;
+  }
 
   const saveBtn = document.getElementById(`pm-save-btn-${id}`);
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }

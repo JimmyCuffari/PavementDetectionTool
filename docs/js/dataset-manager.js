@@ -25,13 +25,15 @@ export async function syncAndGetDatasets(token, project) {
       `'${datasetsFolder.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       'id,name,createdTime'
     );
+    const driveIds = new Set(folders.map(f => f.id));
     const existing = getDatasetsForProject(project.id);
-    const knownIds = new Set(existing.map(d => d.driveFolderId));
-    let   changed  = false;
+    const kept     = existing.filter(d => driveIds.has(d.driveFolderId));
+    const knownIds = new Set(kept.map(d => d.driveFolderId));
+    let   changed  = existing.length !== kept.length;
 
     for (const folder of folders) {
       if (knownIds.has(folder.id)) continue;
-      existing.push({
+      kept.push({
         id:            crypto.randomUUID(),
         name:          folder.name,
         description:   '',
@@ -42,11 +44,13 @@ export async function syncAndGetDatasets(token, project) {
     }
 
     if (changed) {
-      saveDatasets(project.id, existing);
+      const activeId = getCurrentDataset()?.id;
+      if (activeId && !kept.find(d => d.id === activeId)) setCurrentDataset(null);
+      saveDatasets(project.id, kept);
       localStorage.setItem('pavement_tool_last_sync', new Date().toISOString());
       window.dispatchEvent(new CustomEvent('drive-synced'));
     }
-    return existing;
+    return kept;
   } catch {
     return getDatasetsForProject(project.id);
   }
@@ -181,14 +185,18 @@ async function syncDatasetsFromDrive(project) {
   if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
 
   try {
-    const before  = getDatasetsForProject(project.id).length;
+    const before  = getDatasetsForProject(project.id);
     const updated = await syncAndGetDatasets(token, project);
-    const added   = updated.length - before;
-    if (added > 0) {
-      toast(`Imported ${added} dataset${added > 1 ? 's' : ''} from Drive`, 'success');
+    const added   = updated.filter(d => !before.find(b => b.id === d.id)).length;
+    const removed = before.filter(b => !updated.find(u => u.id === b.id)).length;
+    if (added > 0 || removed > 0) {
+      const parts = [];
+      if (added   > 0) parts.push(`imported ${added}`);
+      if (removed > 0) parts.push(`removed ${removed}`);
+      toast(`Sync complete: ${parts.join(', ')} dataset${added + removed > 1 ? 's' : ''}`, 'success');
       rerender();
     } else {
-      toast('All Drive folders are already linked', 'success');
+      toast('Datasets are up to date with Drive', 'success');
     }
   } catch (err) {
     toast(`Sync failed: ${err.message}`, 'error');
@@ -270,7 +278,19 @@ async function saveEdit(id, project) {
   const dataset  = datasets.find(d => d.id === id);
   if (!dataset) return;
 
-  if (newName === dataset.name) { editingId = null; rerender(); return; }
+  const nameChanged = newName !== dataset.name;
+  const descChanged = newDesc !== (dataset.description ?? '');
+
+  if (!nameChanged && !descChanged) { editingId = null; rerender(); return; }
+
+  if (!nameChanged) {
+    dataset.description = newDesc;
+    saveDatasets(project.id, datasets);
+    toast('Dataset updated', 'success');
+    editingId = null;
+    rerender();
+    return;
+  }
 
   // Local duplicate check (excluding self)
   if (datasets.some(d => d.id !== id && d.name.toLowerCase() === newName.toLowerCase())) {
