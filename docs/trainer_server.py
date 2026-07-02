@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pavement Dataset Tool — Local Training Server
+Pavement Dataset Tool — Local Training Server --
 Download via the web UI, then run:  python trainer_server.py [--port 7860]
 
 On first run the trainertool:// URL protocol is registered with the OS so
