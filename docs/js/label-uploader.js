@@ -257,12 +257,13 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
       done++; setProgress(done);
     },
     async () => {
-      const existingId = existingLabels.get(json.name);
+      const existingId   = existingLabels.get(json.name);
+      const decisionKey  = `${folderName}/${json.name}`;
       const text = await json.text();
       await upsertFile(token, folders.labelsId, json.name, 'application/json',
         new Blob([text], { type: 'application/json' }), existingId);
-      if (existingId && existingId in reviewDecisions) {
-        delete reviewDecisions[existingId];
+      if (decisionKey in reviewDecisions) {
+        delete reviewDecisions[decisionKey];
         clearedAny = true;
       }
       done++; setProgress(done);
