@@ -275,7 +275,11 @@ async function startUpload(pairs, folderName, skippedCount = 0) {
   if (clearedAny) {
     try {
       await writeJsonFile(token, rawDataFolder.id, 'review_decisions.json', reviewDecisions);
-    } catch (err) { console.warn('Failed to update review decisions:', err); }
+      toast('Review decisions reset to pending for re-uploaded files', 'success');
+    } catch (err) {
+      console.warn('Failed to update review decisions:', err);
+      toast('Warning: could not reset review decisions on Drive', 'error');
+    }
   }
 
   const pairWord  = pairs.length === 1 ? 'pair' : 'pairs';
