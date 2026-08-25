@@ -1652,6 +1652,287 @@ def _run_optimize_threshold(data):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+# ── Stitch job state ─────────────────────────────────────────────────────────
+_stitch_job  = {'state': 'idle', 'progress': 0, 'log': [], 'png_b64': None, 'sections': []}
+_stitch_stop = threading.Event()
+
+@app.route('/stitch', methods=['POST'])
+def stitch():
+    global _stitch_job, _stitch_stop
+    if _stitch_job['state'] == 'running':
+        return jsonify({'error': 'Stitch already in progress'}), 409
+    data = request.json or {}
+    token      = data.get('drive_token', '')
+    folder_id  = data.get('frames_folder_id') or ''
+    local_path = data.get('frames_local_path') or ''
+    homography = data.get('homography')
+    if not homography:
+        return jsonify({'error': 'homography required'}), 400
+    if not folder_id and not local_path:
+        return jsonify({'error': 'frames_folder_id or frames_local_path required'}), 400
+    if folder_id and not token:
+        return jsonify({'error': 'drive_token required when using frames_folder_id'}), 400
+    _stitch_job  = {'state': 'running', 'progress': 0, 'log': [], 'png_b64': None, 'sections': []}
+    _stitch_stop.clear()
+    threading.Thread(
+        target=_run_stitch,
+        args=(token, folder_id, local_path, homography,
+              data.get('start_frame', 0), data.get('end_frame'),
+              data.get('result_folder_id'), data.get('yolo_model_path')),
+        daemon=True,
+    ).start()
+    return jsonify({'status': 'started'})
+
+@app.route('/stitch-status')
+def stitch_status():
+    return jsonify(_stitch_job)
+
+@app.route('/stitch-stop', methods=['POST'])
+def stitch_stop():
+    _stitch_stop.set()
+    return jsonify({'ok': True})
+
+# ── Stitcher functions (extracted from road_section_stitcher.py) ──────────────
+
+_S_PX_PER_IN   = 3
+_S_SECTION_IN  = 6.56 * 12   # 78.72 in
+_S_MOUNT_RATIO = 0.65
+_S_MIN_STEP_IN = 0.5
+_S_WP_HALF_IN  = 9.0
+_S_SEV_SLIGHT  = 6  / 25.4
+_S_SEV_SEVERE  = 19 / 25.4
+
+def _build_ipm(homography_dict):
+    import numpy as np
+    cal = homography_dict
+    H   = np.array(cal['H'], dtype=np.float64)
+    pts = cal['calibration_points']
+    xs  = [p['ground'][0] for p in pts]
+    ys  = [p['ground'][1] for p in pts]
+    PAD = 24.0
+    X_min = min(xs) - PAD;  X_max = max(xs) + PAD
+    Y_min = min(ys)
+    _cx   = (X_min + X_max) / 2.0
+    _p    = H @ np.array([_cx, 0.0, 1.0])
+    Y_max = min(_p[1] / _p[2], max(ys) + 120.0)
+    W = round((X_max - X_min) * _S_PX_PER_IN)
+    H_ = round((Y_max - Y_min) * _S_PX_PER_IN)
+    G = np.array([
+        [1.0/_S_PX_PER_IN, 0,                 X_min],
+        [0,                -1.0/_S_PX_PER_IN,  Y_max],
+        [0,                 0,                 1    ],
+    ], dtype=np.float64)
+    M = np.linalg.inv(H) @ G
+    return H, M, W, H_, X_min, X_max, Y_min, Y_max
+
+def _stitch_frames(frames_dir, H, M, IPM_W, IPM_H, X_min, X_max, Y_min, Y_max,
+                   start=0, end=None, progress_cb=None, cancel_flag=None):
+    import numpy as np, cv2, re
+    files = sorted(
+        [f for f in os.listdir(frames_dir) if f.lower().endswith('.jpg')],
+        key=lambda n: int(m.group(1)) if (m := re.search(r'(\d+)', n)) else -1,
+    )
+    if end is None or end >= len(files): end = len(files) - 1
+    start = max(0, min(start, end))
+    subset = files[start:end + 1]
+    total  = len(subset)
+
+    CANVAS_H = max(round(total * 15 * _S_PX_PER_IN), IPM_H * 2)
+    canvas   = np.zeros((CANVAS_H, IPM_W, 3), dtype=np.uint8)
+    orb = cv2.ORB_create(nfeatures=3000)
+    bf  = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    prev_kp = prev_des = None
+    dy_px = 0.0
+    last_cy1 = IPM_H
+
+    for step, fname in enumerate(subset):
+        if cancel_flag and cancel_flag[0]: return None
+        img = cv2.imread(os.path.join(frames_dir, fname))
+        if img is None: continue
+        ipm = cv2.warpPerspective(img, M, (IPM_W, IPM_H),
+              flags=cv2.WARP_INVERSE_MAP | cv2.INTER_LINEAR,
+              borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        gray_ipm = cv2.cvtColor(ipm, cv2.COLOR_BGR2GRAY)
+        h_frame  = img.shape[0]
+        road_roi = img[:round(h_frame * _S_MOUNT_RATIO)]
+        kp, des  = orb.detectAndCompute(road_roi, None)
+        if prev_kp is not None and des is not None and prev_des is not None and len(des) > 5:
+            matches = sorted(bf.match(prev_des, des), key=lambda m: m.distance)[:80]
+            dy_list = []
+            for match in matches:
+                pt1 = np.array([prev_kp[match.queryIdx].pt[0], prev_kp[match.queryIdx].pt[1], 1.0])
+                pt2 = np.array([kp[match.trainIdx].pt[0],      kp[match.trainIdx].pt[1],      1.0])
+                g1 = H @ pt1; g1 /= g1[2]
+                g2 = H @ pt2; g2 /= g2[2]
+                if (X_min <= g1[0] <= X_max and Y_min <= g1[1] <= Y_max and
+                        X_min <= g2[0] <= X_max and Y_min <= g2[1] <= Y_max):
+                    dy_list.append(g2[1] - g1[1])
+            if dy_list:
+                step_in = float(np.median(dy_list))
+                if step_in >= _S_MIN_STEP_IN:
+                    dy_px += step_in * _S_PX_PER_IN
+        prev_kp, prev_des = kp, des
+        cy0 = int(round(dy_px)); cy1 = cy0 + IPM_H
+        if cy0 >= 0 and cy1 <= CANVAS_H:
+            valid = gray_ipm > 5
+            canvas[cy0:cy1][valid] = ipm[valid]
+            last_cy1 = cy1
+        if progress_cb: progress_cb(int((step + 1) / total * 80))  # 0–80% for stitching
+    return canvas[:last_cy1]
+
+def _classify_cracks_simple(binary_mask, wp_bounds=None, min_area_px=30):
+    import numpy as np, cv2
+    try:
+        from skimage.morphology import skeletonize as _skel
+        has_skimage = True
+    except ImportError:
+        has_skimage = False
+    mask_u8 = binary_mask.astype(np.uint8)
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
+    cracks = []
+    for comp in range(1, n):
+        area_px = int(stats[comp, cv2.CC_STAT_AREA])
+        if area_px < min_area_px: continue
+        comp_mask = (labels == comp).astype(np.uint8)
+        cx = float(centroids[comp][0])
+        contours, _ = cv2.findContours(comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours: continue
+        if has_skimage:
+            skel = _skel(comp_mask > 0)
+            length_px = max(float(np.sum(skel)), 1.0)
+        else:
+            _, _, bw, bh = cv2.boundingRect(max(contours, key=cv2.contourArea))
+            length_px = max(float(bw), float(bh), 1.0)
+        dist = cv2.distanceTransform(comp_mask, cv2.DIST_L2, 5)
+        max_width_px  = float(dist.max()) * 2.0
+        max_width_in  = max_width_px / _S_PX_PER_IN
+        ys, xs = np.where(comp_mask > 0)
+        if len(xs) >= 5:
+            pts = np.stack([xs.astype(float), ys.astype(float)], axis=0)
+            cov = np.cov(pts)
+            eigvecs = np.linalg.eigh(cov)[1]
+            principal = eigvecs[:, 1]
+            angle_deg = abs(float(np.degrees(np.arctan2(principal[0], principal[1])))) % 90.0
+        else:
+            angle_deg = 45.0
+        crack_type = 'longitudinal' if angle_deg < 20 else ('transverse' if angle_deg > 70 else 'diagonal')
+        severity   = 'severe' if max_width_in >= _S_SEV_SEVERE else ('moderate' if max_width_in >= _S_SEV_SLIGHT else 'slight')
+        if wp_bounds is not None:
+            (l_min, l_max), (r_min, r_max) = wp_bounds
+            in_wp = (l_min <= cx <= l_max) or (r_min <= cx <= r_max)
+        else:
+            in_wp = False
+        cracks.append(dict(length_ft=length_px/_S_PX_PER_IN/12, max_width_in=max_width_in,
+                           crack_type=crack_type, severity=severity,
+                           in_wheel_path=in_wp, area_px=area_px))
+    total_area  = sum(c['area_px'] for c in cracks)
+    section_area = binary_mask.shape[0] * binary_mask.shape[1]
+    if len(cracks) >= 5 and total_area / max(section_area, 1) * 100 >= 10:
+        for c in cracks: c['crack_type'] = 'pattern'
+    return cracks
+
+def _analyze_sections(canvas, IPM_W, wp_inset_in=24.0):
+    import numpy as np, cv2
+    SECTION_PX = max(1, round(_S_SECTION_IN * _S_PX_PER_IN))
+    total_h    = canvas.shape[0]
+    half_w     = IPM_W / 2
+    wp_l = (half_w - wp_inset_in*_S_PX_PER_IN - _S_WP_HALF_IN*_S_PX_PER_IN,
+            half_w - wp_inset_in*_S_PX_PER_IN + _S_WP_HALF_IN*_S_PX_PER_IN)
+    wp_r = (half_w + wp_inset_in*_S_PX_PER_IN - _S_WP_HALF_IN*_S_PX_PER_IN,
+            half_w + wp_inset_in*_S_PX_PER_IN + _S_WP_HALF_IN*_S_PX_PER_IN)
+    wp_bounds = (wp_l, wp_r)
+    sections = []
+    for i in range(max(1, total_h // SECTION_PX)):
+        y0 = i * SECTION_PX; y1 = min(y0 + SECTION_PX, total_h)
+        tile = canvas[y0:y1]
+        if tile.shape[0] < 4: continue
+        gray  = cv2.cvtColor(tile, cv2.COLOR_BGR2GRAY)
+        valid = gray > 8
+        dark  = valid & (gray < 45)
+        total = int(valid.sum())
+        crack_rate = int(dark.sum()) / max(total, 1) * 100
+        psci = round(max(0.0, 100.0 - crack_rate * 2.0), 1)
+        cracks = _classify_cracks_simple(dark, wp_bounds=wp_bounds)
+        sections.append({
+            'section':    i + 1,
+            'ft_start':   round(i * _S_SECTION_IN / 12, 1),
+            'ft_end':     round((i + 1) * _S_SECTION_IN / 12, 1),
+            'psci':       psci,
+            'crack_count': len(cracks),
+            'crack_rate': round(crack_rate, 2),
+        })
+    return sections
+
+def _run_stitch(token, frames_folder_id, frames_local_path, homography, start_frame, end_frame,
+                result_folder_id, yolo_model_path):
+    import base64, cv2
+    global _stitch_job
+    def log(msg):
+        _stitch_job['log'].append(msg)
+        print(f'[STITCH] {msg}')
+    def prog(p):
+        _stitch_job['progress'] = p
+
+    if frames_local_path:
+        frames_dir = frames_local_path
+        log(f'Using local frames: {frames_dir}')
+        if not os.path.isdir(frames_dir):
+            _stitch_job['state'] = 'error'
+            log(f'ERROR: folder not found: {frames_dir}')
+            return
+    else:
+        frames_dir = _cache_path(frames_folder_id)
+        if not _is_cached(frames_folder_id):
+            log('Downloading frames from Drive…')
+            os.makedirs(frames_dir, exist_ok=True)
+            count = _dl_folder(token, frames_folder_id, frames_dir)
+            log(f'Downloaded {count} files')
+        else:
+            log('Using cached frames')
+
+    try:
+        log('Building IPM transform…')
+        H, M, IPM_W, IPM_H, X_min, X_max, Y_min, Y_max = _build_ipm(homography)
+        prog(5)
+
+        log('Stitching frames…')
+        cancel = [False]
+        def _cancel_check(p):
+            cancel[0] = _stitch_stop.is_set()
+            prog(p)
+        canvas = _stitch_frames(frames_dir, H, M, IPM_W, IPM_H,
+                                X_min, X_max, Y_min, Y_max,
+                                start=start_frame or 0, end=end_frame,
+                                progress_cb=_cancel_check, cancel_flag=cancel)
+        if canvas is None:
+            _stitch_job['state'] = 'stopped'
+            return
+
+        log(f'Stitched map: {canvas.shape[1]}×{canvas.shape[0]} px')
+        prog(85)
+
+        log('Analysing PSCI per section…')
+        sections = _analyze_sections(canvas, IPM_W)
+        prog(95)
+
+        _, buf = cv2.imencode('.jpg', canvas, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        png_b64 = 'data:image/jpeg;base64,' + base64.b64encode(buf).decode()
+
+        if result_folder_id:
+            log('Uploading results to Drive…')
+            _upload_bytes(token, result_folder_id, 'road_map.jpg', 'image/jpeg', buf.tobytes())
+            _upload_bytes(token, result_folder_id, 'psci_results.json', 'application/json',
+                          json.dumps({'sections': sections}).encode())
+
+        _stitch_job.update({'state': 'done', 'progress': 100,
+                            'png_b64': png_b64, 'sections': sections})
+        log(f'Done — {len(sections)} sections analysed')
+    except Exception as exc:
+        import traceback
+        log(f'Error: {exc}')
+        print(traceback.format_exc())
+        _stitch_job['state'] = 'error'
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     import argparse

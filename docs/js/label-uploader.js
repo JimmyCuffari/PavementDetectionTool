@@ -96,14 +96,15 @@ async function processAccumulate(files, inferredName) {
   const newJsonMap = buildJsonMap(results);
   for (const [k, v] of newJsonMap) accumJsons.set(k, v);
 
-  const pairs = buildPairs(accumImages, accumJsons);
+  const pairs     = buildPairs(accumImages, accumJsons);
+  const jsonCount = countUniqueJsonFiles(accumJsons);
 
   document.getElementById('ul-drop-sub').textContent =
-    `${accumImages.size} image${accumImages.size === 1 ? '' : 's'}, ${accumJsons.size} JSON${accumJsons.size === 1 ? '' : 's'} accumulated — drop another folder to add more`;
+    `${accumImages.size} image${accumImages.size === 1 ? '' : 's'}, ${jsonCount} JSON${jsonCount === 1 ? '' : 's'} accumulated — drop another folder to add more`;
 
   document.getElementById('ul-stat-row').innerHTML = `
     <div class="stat"><div class="stat-label">Images</div><div class="stat-value">${accumImages.size}</div></div>
-    <div class="stat"><div class="stat-label">JSON Files</div><div class="stat-value">${accumJsons.size}</div></div>
+    <div class="stat"><div class="stat-label">JSON Files</div><div class="stat-value">${jsonCount}</div></div>
     <div class="stat"><div class="stat-label">Matched Pairs</div><div class="stat-value text-success">${pairs.length}</div></div>
   `;
 
@@ -130,9 +131,8 @@ function buildJsonMap(results) {
   for (const result of results) {
     if (!result) continue;
     const { file, parsed } = result;
-    if (!Array.isArray(parsed.shapes) || parsed.shapes.length === 0) continue;
     const raw      = parsed.imagePath || '';
-    const basename = raw.split(/[/\\]/).pop();
+    const basename = raw.split(/[/\\]/).pop() || file.name.replace(/\.json$/i, '');
     if (basename) {
       jsonMap.set(basename, { file, parsed });
       const stem = basename.replace(/\.[^.]+$/, '');
@@ -140,6 +140,14 @@ function buildJsonMap(results) {
     }
   }
   return jsonMap;
+}
+
+// jsonMap stores each JSON under up to two keys (full name + stem), so its
+// .size overcounts the actual number of distinct JSON files.
+function countUniqueJsonFiles(jsonMap) {
+  const seen = new Set();
+  for (const { file } of jsonMap.values()) seen.add(file);
+  return seen.size;
 }
 
 function buildPairs(imageMap, jsonMap) {
