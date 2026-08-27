@@ -168,6 +168,12 @@ export async function listAllFiles(token, q, fileFields = 'id,name,mimeType') {
   return allFiles;
 }
 
+// Fetch metadata for a single file/folder by ID (e.g. its name)
+export async function getFileMetadata(token, fileId, fields = 'id,name') {
+  const resp = await driveRequest(token, `${DRIVE_API}/files/${fileId}?fields=${fields}&supportsAllDrives=true`);
+  return resp.json();
+}
+
 // Check if a folder exists without creating it — returns {id,name} or null
 export async function findFolder(token, name, parentId) {
   const q = `name='${name}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;

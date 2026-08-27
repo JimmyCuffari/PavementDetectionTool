@@ -7,6 +7,7 @@ import { renderRefactor }   from './label-refactor.js';
 import { renderTrainer }    from './model-trainer.js';
 import { renderTester }     from './model-tester.js';
 import { renderProcessData } from './process-data.js';
+import { renderCoverageMap } from './coverage-map.js';
 import {
   renderProjectManager,
   getCurrentProject,
@@ -128,6 +129,7 @@ renderRefactor(document.getElementById('tab-refactor'));
 renderTrainer(document.getElementById('tab-train-model'));
 renderTester(document.getElementById('tab-testing'));
 renderProcessData(document.getElementById('tab-process-data'));
+renderCoverageMap(document.getElementById('tab-coverage-map'));
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
