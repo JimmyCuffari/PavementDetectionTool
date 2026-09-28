@@ -2,7 +2,7 @@
 // Add or remove addresses as needed, then commit and push.
 export const MASTER_USERS = [
   'jimmycuffari.jr@gmail.com',
-  'cuffar29@students.rowan.edu',
+  'cuffar29@rowan.edu',
   'nortona@rowan.edu',
   'jvrishitha@gmail.com'
 ];
