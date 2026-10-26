@@ -2,13 +2,25 @@ import { getToken } from './auth.js';
 import { listAllFiles, downloadFileContent } from './drive.js';
 import { getDatasetRawDataFolder, getCurrentDataset } from './dataset-manager.js';
 import { makeSemaphore, toast } from './utils.js';
-import { classColor, loadColorOverrides, shapeToSvg } from './label-draw.js';
+import { classColor, haloColor, loadColorOverrides, shapeToSvg } from './label-draw.js';
 
 // Road Viewer — lays a street's frames edge-to-edge as one continuous road,
 // with LabelMe annotations overlaid and per-class visibility toggles.
 
-const ORIENT_KEY = 'pavement_road_viewer_orientation';
-const SVG_NS     = 'http://www.w3.org/2000/svg';
+const ORIENT_KEY  = 'pavement_road_viewer_orientation';
+const LABEL_KEY   = 'pavement_road_viewer_label_mode';
+const SECTION_KEY = 'pavement_road_viewer_section_mode';
+const SVG_NS      = 'http://www.w3.org/2000/svg';
+const ZOOM_MIN    = 25;
+const ZOOM_MAX    = 800;
+const ZOOM_STEP   = 1.25;   // factor per +/- click
+
+const SECTION_MODES = [
+  { value: 'hover', label: 'On hover' },
+  { value: 'tag',   label: 'Tag on each image' },
+  { value: 'ruler', label: 'Ruler beside road' },
+  { value: 'off',   label: 'Hidden' },
+];
 
 let root        = null;   // tab container
 let road        = null;   // scrollable road element
@@ -21,13 +33,22 @@ let blobUrls    = [];
 let loadToken   = 0;      // bumped on every street load; stale async work checks it
 let refDims     = { w: 1, h: 1 };
 let zoom        = 100;    // percent of fit
-let orientation = readOrientation();
+let orientation = readPref(ORIENT_KEY, ['vertical', 'horizontal']);
+let labelMode   = readPref(LABEL_KEY, ['dark', 'light']);          // label colors tuned for dark or light imagery
+let sectionMode = readPref(SECTION_KEY, SECTION_MODES.map(m => m.value));
 let observer    = null;
 const imageSem  = makeSemaphore(6);
 
-function readOrientation() {
-  try { return localStorage.getItem(ORIENT_KEY) === 'horizontal' ? 'horizontal' : 'vertical'; }
-  catch { return 'vertical'; }
+// Returns the saved value if it's one of `allowed`, else the first allowed value
+function readPref(key, allowed) {
+  try {
+    const saved = localStorage.getItem(key);
+    return allowed.includes(saved) ? saved : allowed[0];
+  } catch { return allowed[0]; }
+}
+
+function writePref(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* ignore */ }
 }
 
 // ── Render shell ──────────────────────────────────────────────────────────────
@@ -48,9 +69,11 @@ export function renderRoadViewer(container) {
           <button class="rdv-seg-btn" data-orient="horizontal">Horizontal</button>
         </div>
 
-        <div class="rdv-field rdv-zoom">
+        <div class="rdv-field rdv-zoom" title="Tip: Ctrl + scroll (or pinch) to zoom at the cursor">
           <label for="rdv-zoom">Zoom</label>
-          <input type="range" id="rdv-zoom" min="25" max="400" step="5" value="100" />
+          <button class="btn btn-ghost btn-sm rdv-zoom-btn" id="rdv-zoom-out" aria-label="Zoom out">&minus;</button>
+          <input type="range" id="rdv-zoom" min="${ZOOM_MIN}" max="${ZOOM_MAX}" step="5" value="100" />
+          <button class="btn btn-ghost btn-sm rdv-zoom-btn" id="rdv-zoom-in" aria-label="Zoom in">+</button>
           <span id="rdv-zoom-val">100%</span>
           <button class="btn btn-ghost btn-sm" id="rdv-fit">Fit</button>
         </div>
@@ -58,9 +81,27 @@ export function renderRoadViewer(container) {
         <span id="rdv-status" class="text-dim rdv-status"></span>
       </div>
 
+      <div class="rdv-toolbar">
+        <div class="rdv-field">
+          <span>Label colors for</span>
+          <div class="rdv-seg" role="group" aria-label="Label colors">
+            <button class="rdv-seg-btn" data-label-mode="dark"  title="Bright colors with a dark outline — for asphalt and darker images">Dark images</button>
+            <button class="rdv-seg-btn" data-label-mode="light" title="Deep colors with a white outline — for concrete and brighter images">Light images</button>
+          </div>
+        </div>
+
+        <div class="rdv-field">
+          <label for="rdv-section-mode">Section names</label>
+          <select id="rdv-section-mode">
+            ${SECTION_MODES.map(m => `<option value="${m.value}">${m.label}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
       <div id="rdv-labels" class="rdv-labels hidden"></div>
       <div id="rdv-empty" class="rdv-empty text-dim hidden"></div>
       <div id="rdv-road" class="rdv-road"></div>
+      <style id="rdv-color-style"></style>
       <style id="rdv-hide-style"></style>
     </div>
   `;
@@ -75,7 +116,26 @@ export function renderRoadViewer(container) {
 
   const zoomInput = container.querySelector('#rdv-zoom');
   zoomInput.addEventListener('input', () => setZoom(Number(zoomInput.value)));
+  container.querySelector('#rdv-zoom-in').addEventListener('click',  () => setZoom(zoom * ZOOM_STEP));
+  container.querySelector('#rdv-zoom-out').addEventListener('click', () => setZoom(zoom / ZOOM_STEP));
   container.querySelector('#rdv-fit').addEventListener('click', () => setZoom(100));
+
+  container.querySelectorAll('[data-label-mode]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      labelMode = btn.dataset.labelMode;
+      writePref(LABEL_KEY, labelMode);
+      updateSegButtons();
+      applyColors();
+      renderLabelToggles();
+    }));
+
+  const sectionSelect = container.querySelector('#rdv-section-mode');
+  sectionSelect.value = sectionMode;
+  sectionSelect.addEventListener('change', () => {
+    sectionMode = sectionSelect.value;
+    writePref(SECTION_KEY, sectionMode);
+    relayout();   // the ruler adds a gutter, which changes the fit size
+  });
 
   container.querySelector('#rdv-labels').addEventListener('change', (e) => {
     const idx = e.target.dataset?.classIdx;
@@ -91,9 +151,16 @@ export function renderRoadViewer(container) {
     applyHidden();
   });
 
-  // Mouse wheel scrolls along the road in horizontal mode
   road.addEventListener('wheel', (e) => {
-    if (orientation !== 'horizontal' || e.ctrlKey) return;
+    // Ctrl + wheel (and trackpad pinch, which the browser reports as ctrl + wheel) zooms at the cursor
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const rect = road.getBoundingClientRect();
+      setZoom(zoom * Math.exp(-e.deltaY * 0.002), { x: e.clientX - rect.left, y: e.clientY - rect.top });
+      return;
+    }
+    // Plain wheel scrolls along the road in horizontal mode
+    if (orientation !== 'horizontal') return;
     if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
     road.scrollLeft += e.deltaY;
     e.preventDefault();
@@ -113,7 +180,7 @@ export function renderRoadViewer(container) {
     if (streetsStale) listStreets(false);
   });
 
-  updateOrientationButtons();
+  updateSegButtons();
   showEmpty('Open a dataset in the Datasets tab first.');
 }
 
@@ -316,10 +383,10 @@ function renderLabelToggles() {
   wrap.innerHTML = `
     <span class="rdv-labels-title">Labels</span>
     ${classes.map((c, i) => {
-      const color = classColor(c.name);
+      const color = classColor(c.name, labelMode);
       return `
-        <label class="rdv-label-chip" style="border-color:${color}55;">
-          <input type="checkbox" data-class-idx="${i}" checked />
+        <label class="rdv-label-chip" style="border-color:${color}88;">
+          <input type="checkbox" data-class-idx="${i}" ${hidden.has(i) ? '' : 'checked'} />
           <span class="rdv-swatch" style="background:${color};"></span>
           ${escapeHtml(c.name)} <span class="text-dim">(${c.count})</span>
         </label>`;
@@ -328,6 +395,20 @@ function renderLabelToggles() {
     <button class="btn btn-ghost btn-sm" data-labels-action="none">None</button>
   `;
   wrap.classList.remove('hidden');
+}
+
+// Label colors live in a stylesheet keyed by class index, so switching
+// dark/light mode recolors every frame without touching the SVGs
+function applyColors() {
+  const style = root?.querySelector('#rdv-color-style');
+  if (!style) return;
+  const rules = classes.map((c, i) => {
+    const color = classColor(c.name, labelMode);
+    return `.rdv-road g[data-class-idx="${i}"] .rdv-shape { stroke: ${color}; }
+.rdv-road g[data-class-idx="${i}"] .rdv-shape[data-kind="area"] { fill: ${color}40; }`;
+  });
+  rules.push(`.rdv-road .rdv-halo { stroke: ${haloColor(labelMode)}; }`);
+  style.textContent = rules.join('\n');
 }
 
 function applyHidden() {
@@ -351,7 +432,6 @@ function buildRoad() {
     const el = document.createElement('div');
     el.className = 'rdv-frame';
     el.dataset.idx = i;
-    el.title = f.name;
     const inner = document.createElement('div');
     inner.className = 'rdv-inner';
     const img = document.createElement('img');
@@ -366,30 +446,43 @@ function buildRoad() {
       for (const shape of f.shapes) {
         const node = shapeToSvg(shape);
         if (!node) continue;
+        // A wider contrasting copy underneath keeps the shape visible on any background
+        const halo = node.cloneNode();
+        halo.setAttribute('class', 'rdv-halo');
+        node.setAttribute('class', 'rdv-shape');
         const g = document.createElementNS(SVG_NS, 'g');
         g.dataset.classIdx = classIdx.get(shape.label || '?');
-        g.appendChild(node);
+        g.append(halo, node);
         svg.appendChild(g);
       }
       inner.appendChild(svg);
     }
 
-    el.appendChild(inner);
+    // Section name sits outside the rotated inner box so it always reads upright
+    const section = document.createElement('div');
+    section.className = 'rdv-section';
+    section.textContent = f.name.replace(/\.[^.]+$/, '');
+    el.append(inner, section);
     f.el = el;
     f.inner = inner;
     frag.appendChild(el);
   });
 
   road.appendChild(frag);
+  applyColors();
   road.scrollTop = 0;
   road.scrollLeft = 0;
   relayout();
   frames.forEach(f => observer.observe(f.el));
 }
 
+// Space available across the road (width when vertical, height when horizontal), minus any ruler gutter
 function crossSize() {
   if (!road) return 0;
-  return orientation === 'vertical' ? road.clientWidth : road.clientHeight;
+  const cs = getComputedStyle(road);
+  return orientation === 'vertical'
+    ? road.clientWidth  - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+    : road.clientHeight - parseFloat(cs.paddingTop)  - parseFloat(cs.paddingBottom);
 }
 
 function currentScale() {
@@ -413,58 +506,83 @@ function sizeFrame(f, scale) {
   }
 }
 
-// Re-sizes every frame while keeping the frame in view anchored in place
-function relayout() {
+// Re-sizes every frame while keeping the point at `focus` (px from the road's top-left;
+// defaults to the top-left corner) over the same spot of the same frame
+function relayout(focus = { x: 0, y: 0 }) {
   if (!frames.length || !frames[0].el) return;
-  const anchor = getAnchor();
+  const anchor = getAnchor(focus);
   road.classList.toggle('rdv-horizontal', orientation === 'horizontal');
+  SECTION_MODES.forEach(m => road.classList.toggle(`rdv-sec-${m.value}`, m.value === sectionMode));
   const scale = currentScale();
   frames.forEach(f => sizeFrame(f, scale));
-  restoreAnchor(anchor);
+  restoreAnchor(anchor, focus);
 }
 
-function getAnchor() {
-  const vertical = road.classList.contains('rdv-horizontal') === false;
-  const pos = vertical ? road.scrollTop : road.scrollLeft;
+function getAnchor(focus) {
+  const vertical = !road.classList.contains('rdv-horizontal');
+  const along  = vertical ? focus.y : focus.x;
+  const cross  = vertical ? focus.x : focus.y;
+  const pos    = (vertical ? road.scrollTop : road.scrollLeft) + along;
+  const crossScroll = vertical ? road.scrollLeft : road.scrollTop;
+  const crossTotal  = vertical ? road.scrollWidth : road.scrollHeight;
+  const anchor = {
+    vertical,
+    idx: frames.length - 1, frac: 0,
+    crossFrac: crossTotal ? (crossScroll + cross) / crossTotal : 0,
+  };
   for (let i = 0; i < frames.length; i++) {
     const el    = frames[i].el;
     const start = vertical ? el.offsetTop : el.offsetLeft;
     const size  = vertical ? el.offsetHeight : el.offsetWidth;
-    if (pos < start + size) return { idx: i, frac: size ? Math.max(0, (pos - start) / size) : 0 };
+    if (pos < start + size) {
+      anchor.idx  = i;
+      anchor.frac = size ? Math.max(0, (pos - start) / size) : 0;
+      break;
+    }
   }
-  return { idx: frames.length - 1, frac: 0 };
+  return anchor;
 }
 
-function restoreAnchor({ idx, frac }) {
+function restoreAnchor({ vertical: wasVertical, idx, frac, crossFrac }, focus) {
   const el = frames[idx]?.el;
   if (!el) return;
-  if (orientation === 'vertical') {
-    road.scrollTop  = el.offsetTop + frac * el.offsetHeight;
-    road.scrollLeft = 0;
+  const vertical = orientation === 'vertical';
+  const along = vertical ? focus.y : focus.x;
+  const cross = vertical ? focus.x : focus.y;
+  // Sideways position only carries over within the same orientation
+  const crossPos = wasVertical === vertical
+    ? crossFrac * (vertical ? road.scrollWidth : road.scrollHeight) - cross
+    : 0;
+  if (vertical) {
+    road.scrollTop  = el.offsetTop + frac * el.offsetHeight - along;
+    road.scrollLeft = crossPos;
   } else {
-    road.scrollLeft = el.offsetLeft + frac * el.offsetWidth;
-    road.scrollTop  = 0;
+    road.scrollLeft = el.offsetLeft + frac * el.offsetWidth - along;
+    road.scrollTop  = crossPos;
   }
 }
 
 function setOrientation(next) {
   if (next === orientation) return;
   orientation = next;
-  try { localStorage.setItem(ORIENT_KEY, next); } catch { /* ignore */ }
-  updateOrientationButtons();
+  writePref(ORIENT_KEY, next);
+  updateSegButtons();
   relayout();
 }
 
-function updateOrientationButtons() {
+function updateSegButtons() {
   root.querySelectorAll('[data-orient]').forEach(btn =>
     btn.classList.toggle('active', btn.dataset.orient === orientation));
+  root.querySelectorAll('[data-label-mode]').forEach(btn =>
+    btn.classList.toggle('active', btn.dataset.labelMode === labelMode));
 }
 
-function setZoom(value) {
-  zoom = value;
-  root.querySelector('#rdv-zoom').value = value;
-  root.querySelector('#rdv-zoom-val').textContent = `${value}%`;
-  relayout();
+// focus: point (px from the road's top-left) that stays put while zooming; defaults to the view's center
+function setZoom(value, focus) {
+  zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));   // unrounded so small pinch steps accumulate
+  root.querySelector('#rdv-zoom').value = Math.round(zoom);
+  root.querySelector('#rdv-zoom-val').textContent = `${Math.round(zoom)}%`;
+  relayout(focus ?? { x: road.clientWidth / 2, y: road.clientHeight / 2 });
 }
 
 // ── Lazy image loading ────────────────────────────────────────────────────────

@@ -2,16 +2,36 @@
 // Used by the Review Annotations and Road Viewer tabs so classes look the same in both.
 
 const COLOR_STORAGE_KEY = 'pavement_review_colors';
+// Bright pastels — readable on dark imagery (asphalt) and the app's dark UI
 const SHAPE_COLORS = ['#4ec9b0','#dcdcaa','#9cdcfe','#c586c0','#ce9178','#4fc1ff','#b5cea8'];
+// Deep, saturated counterparts at the same indices — readable on light imagery (concrete, sun glare)
+const SHAPE_COLORS_LIGHT_BG = ['#007a5e','#8a6a00','#0b4f9c','#86198f','#b3400a','#0055a5','#3f6b12'];
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 export const colorOverrides = {}; // className → hex color string
 
-export function classColor(label) {
-  if (colorOverrides[label]) return colorOverrides[label];
+function classHash(label) {
   let h = 0;
   for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
-  return SHAPE_COLORS[h % SHAPE_COLORS.length];
+  return h;
+}
+
+// mode: 'dark' (colors for dark backgrounds, the default) or 'light' (colors for light backgrounds)
+export function classColor(label, mode = 'dark') {
+  const override = colorOverrides[label];
+  if (mode === 'light') return override ? darken(override, 0.45) : SHAPE_COLORS_LIGHT_BG[classHash(label) % SHAPE_COLORS_LIGHT_BG.length];
+  return override || SHAPE_COLORS[classHash(label) % SHAPE_COLORS.length];
+}
+
+// Outline drawn under each shape so it stays visible against any part of the image
+export function haloColor(mode = 'dark') {
+  return mode === 'light' ? '#ffffff' : '#000000';
+}
+
+function darken(hex, amount) {
+  const n = parseInt(hex.slice(1, 7), 16);
+  const ch = (shift) => Math.round(((n >> shift) & 255) * (1 - amount)).toString(16).padStart(2, '0');
+  return `#${ch(16)}${ch(8)}${ch(0)}`;
 }
 
 export function saveColorOverrides() {
@@ -25,13 +45,13 @@ export function loadColorOverrides() {
   } catch { /* ignore */ }
 }
 
-// Builds an SVG element for one LabelMe shape, in image-pixel coordinates.
-// Styling matches the reviewer's canvas drawShape (solid stroke, 25% fill).
+// Builds an SVG element for one LabelMe shape's geometry, in image-pixel coordinates.
+// Colors are left to the caller (stylesheet); dataset.kind is 'line' or 'area' so it
+// knows whether to fill.
 export function shapeToSvg(shape) {
   const pts = shape.points || [];
   if (!pts.length) return null;
-  const color = classColor(shape.label || '?');
-  const type  = shape.shape_type || 'polygon';
+  const type = shape.shape_type || 'polygon';
   let el;
 
   if (type === 'rectangle' && pts.length >= 2) {
@@ -56,10 +76,7 @@ export function shapeToSvg(shape) {
     el.setAttribute('points', pts.map(([x, y]) => `${x},${y}`).join(' '));
   }
 
-  const isLine = el.tagName === 'polyline';
-  el.setAttribute('stroke', color);
-  el.setAttribute('fill', isLine ? 'none' : color + '40');
-  el.setAttribute('stroke-width', '2');
+  el.dataset.kind = el.tagName === 'polyline' ? 'line' : 'area';
   el.setAttribute('vector-effect', 'non-scaling-stroke');
   return el;
 }

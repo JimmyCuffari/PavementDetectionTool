@@ -1292,3 +1292,38 @@ input[type="color"].rv-color-pick::-webkit-color-swatch { border: none; border-r
 .rdv-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 .rdv-inner img { display: block; width: 100%; height: 100%; }
 .rdv-inner svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.rdv-zoom-btn { min-width: 1.9rem; padding-inline: 0.4rem; font-size: 15px; line-height: 1; }
+.rdv-inner .rdv-shape { stroke-width: 2; fill: none; }
+.rdv-inner .rdv-halo  { stroke-width: 5; fill: none; stroke-opacity: 0.7; stroke-linejoin: round; stroke-linecap: round; }
+
+/* Section names — mode classes are set on .rdv-road */
+.rdv-section {
+  display: none; position: absolute; z-index: 1; pointer-events: none; white-space: nowrap;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.rdv-sec-tag .rdv-section,
+.rdv-sec-hover .rdv-frame:hover .rdv-section {
+  display: block; top: 4px; left: 4px; padding: 1px 6px; border-radius: 3px;
+  background: rgba(0, 0, 0, 0.7); color: #fff;
+}
+.rdv-sec-hover .rdv-frame:hover { outline: 1px solid rgba(255, 255, 255, 0.6); outline-offset: -1px; }
+
+/* Ruler: names in a gutter beside the road, with a tick line at each section boundary */
+.rdv-road.rdv-sec-ruler { padding-left: 170px; padding-top: 10px; }
+.rdv-sec-ruler .rdv-section {
+  display: block; top: 0; right: 100%; margin-right: 10px; transform: translateY(-50%);
+  max-width: 155px; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--text-dim);
+}
+.rdv-sec-ruler .rdv-frame::before {
+  content: ''; position: absolute; z-index: 1; top: 0; left: -8px; right: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.35); pointer-events: none;
+}
+.rdv-road.rdv-horizontal.rdv-sec-ruler { padding-left: 0; padding-top: 26px; }
+.rdv-horizontal.rdv-sec-ruler .rdv-section {
+  top: auto; bottom: 100%; right: auto; left: 4px; margin: 0 0 6px; transform: none;
+  max-width: calc(100% - 8px); text-align: left;
+}
+.rdv-horizontal.rdv-sec-ruler .rdv-frame::before {
+  top: -6px; bottom: 0; left: 0; right: auto; border-top: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+}
