@@ -3,6 +3,7 @@ import { listAllFiles, downloadFileContent, writeJsonFile } from './drive.js';
 import { getDatasetRawDataFolder } from './dataset-manager.js';
 import { makeSemaphore, toast, slugify } from './utils.js';
 import { MASTER_USERS } from './config.js';
+import { classColor, colorOverrides, saveColorOverrides, loadColorOverrides } from './label-draw.js';
 
 let items        = [];      // [{ videoSlug, imageName, imageId, labelName, labelId, uploader }]
 let currentIdx   = 0;
@@ -14,31 +15,8 @@ let currentImg      = null;
 let currentShapes   = [];
 let currentScale    = 1;
 
-let colorOverrides  = {}; // className → hex color string
-const COLOR_STORAGE_KEY = 'pavement_review_colors';
-
 let rawDataFolderId   = null;
 let allDecisions      = {}; // full file contents — includes items outside the current scan
-
-const SHAPE_COLORS = ['#4ec9b0','#dcdcaa','#9cdcfe','#c586c0','#ce9178','#4fc1ff','#b5cea8'];
-
-function classColor(label) {
-  if (colorOverrides[label]) return colorOverrides[label];
-  let h = 0;
-  for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
-  return SHAPE_COLORS[h % SHAPE_COLORS.length];
-}
-
-function saveColorOverrides() {
-  try { localStorage.setItem(COLOR_STORAGE_KEY, JSON.stringify(colorOverrides)); } catch { /* quota */ }
-}
-
-function loadColorOverrides() {
-  try {
-    const saved = localStorage.getItem(COLOR_STORAGE_KEY);
-    if (saved) colorOverrides = JSON.parse(saved);
-  } catch { /* ignore */ }
-}
 
 // ── Render shell ──────────────────────────────────────────────────────────────
 

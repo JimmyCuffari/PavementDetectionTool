@@ -8,6 +8,7 @@ import { renderTrainer }    from './model-trainer.js';
 import { renderTester }     from './model-tester.js';
 import { renderProcessData } from './process-data.js';
 import { renderCoverageMap } from './coverage-map.js';
+import { renderRoadViewer, refreshRoadViewer } from './road-viewer.js';
 import {
   renderProjectManager,
   getCurrentProject,
@@ -73,10 +74,12 @@ document.getElementById('project-select').addEventListener('change', (e) => {
     updateProjectSwitcher();
     hideToolSubtabs();
     updateDatasetIndicator();
+    refreshRoadViewer();
     refreshDatasetManager();
     document.getElementById('train-model-tab-btn')?.classList.remove('hidden');
     document.getElementById('testing-tab-btn')?.classList.remove('hidden');
     document.getElementById('process-data-tab-btn')?.classList.remove('hidden');
+    document.getElementById('road-viewer-tab-btn')?.classList.remove('hidden');
     switchTab('projects');
   }
 });
@@ -87,9 +90,11 @@ renderProjectManager(document.getElementById('tab-projects'), {
     document.getElementById('train-model-tab-btn')?.classList.remove('hidden');
     document.getElementById('testing-tab-btn')?.classList.remove('hidden');
     document.getElementById('process-data-tab-btn')?.classList.remove('hidden');
+    document.getElementById('road-viewer-tab-btn')?.classList.remove('hidden');
     updateProjectSwitcher();
     hideToolSubtabs();
     updateDatasetIndicator();
+    refreshRoadViewer();
     refreshDatasetManager();
     switchSubTab('datasets-mgr');
     switchTab('datasets');
@@ -101,10 +106,12 @@ renderProjectManager(document.getElementById('tab-projects'), {
       document.getElementById('train-model-tab-btn')?.classList.add('hidden');
       document.getElementById('testing-tab-btn')?.classList.add('hidden');
       document.getElementById('process-data-tab-btn')?.classList.add('hidden');
+      document.getElementById('road-viewer-tab-btn')?.classList.add('hidden');
       switchTab('projects');
     }
     hideToolSubtabs();
     updateDatasetIndicator();
+    refreshRoadViewer();
     updateProjectSwitcher();
   },
 });
@@ -113,11 +120,13 @@ renderDatasetManager(document.getElementById('tab-datasets-mgr'), {
   onDatasetOpen(dataset) {
     showToolSubtabs();
     updateDatasetIndicator();
+    refreshRoadViewer();
     switchSubTab('uploader');
   },
   onDatasetChange() {
     hideToolSubtabs();
     updateDatasetIndicator();
+    refreshRoadViewer();
     switchSubTab('datasets-mgr');
   },
 });
@@ -129,6 +138,7 @@ renderRefactor(document.getElementById('tab-refactor'));
 renderTrainer(document.getElementById('tab-train-model'));
 renderTester(document.getElementById('tab-testing'));
 renderProcessData(document.getElementById('tab-process-data'));
+renderRoadViewer(document.getElementById('tab-road-viewer'));
 renderCoverageMap(document.getElementById('tab-coverage-map'));
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
@@ -151,6 +161,7 @@ function onSignedIn(user) {
     document.getElementById('train-model-tab-btn')?.classList.remove('hidden');
     document.getElementById('testing-tab-btn')?.classList.remove('hidden');
     document.getElementById('process-data-tab-btn')?.classList.remove('hidden');
+    document.getElementById('road-viewer-tab-btn')?.classList.remove('hidden');
     // Restore dataset if one was active
     const savedDataset = getCurrentDataset();
     if (savedDataset) {
@@ -167,6 +178,7 @@ function onSignedIn(user) {
 
   updateProjectSwitcher();
   updateDatasetIndicator();
+  refreshRoadViewer();
   updateSyncTimestamp();
   syncFromDrive();
 }

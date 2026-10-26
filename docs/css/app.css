@@ -1247,3 +1247,48 @@ input[type="color"].rv-color-pick::-webkit-color-swatch { border: none; border-r
   padding: 0.75rem 1rem;
   border-top: 1px solid var(--border);
 }
+
+/* ── Road Viewer ──────────────────────────────────────────────────────────── */
+.rdv { display: flex; flex-direction: column; gap: 0.75rem; }
+.rdv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; }
+.rdv-field { display: flex; align-items: center; gap: 0.4rem; font-size: 13px; color: var(--text-dim); }
+.rdv-field select {
+  min-width: 220px; padding: 0.35rem 0.5rem; background: var(--bg-elevated); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--font);
+}
+.rdv-zoom input[type=range] { width: 140px; }
+#rdv-zoom-val { min-width: 3.2em; text-align: right; color: var(--text); }
+.rdv-status { font-size: 13px; margin-left: auto; }
+.rdv-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.rdv-seg-btn {
+  padding: 0.35rem 0.8rem; background: transparent; color: var(--text-dim); border: none;
+  font-family: var(--font); font-size: 13px; cursor: pointer;
+}
+.rdv-seg-btn + .rdv-seg-btn { border-left: 1px solid var(--border); }
+.rdv-seg-btn:hover { background: var(--bg-elevated); color: var(--text); }
+.rdv-seg-btn.active { background: var(--accent); color: #fff; }
+.rdv-labels {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px;
+}
+.rdv-labels-title { font-weight: 600; color: var(--text-bright); margin-right: 0.25rem; }
+.rdv-label-chip {
+  display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border); border-radius: 999px; cursor: pointer; user-select: none;
+}
+.rdv-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.rdv-empty {
+  padding: 2rem; text-align: center; font-size: 14px;
+  background: var(--bg-surface); border: 1px dashed var(--border); border-radius: var(--radius);
+}
+.rdv-road {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start;
+  height: calc(100vh - 260px); min-height: 360px; overflow: auto;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.rdv-road.rdv-horizontal { flex-direction: row; }
+.rdv-road:not(.rdv-horizontal) .rdv-frame { margin-inline: auto; } /* centered, but stays scrollable when zoomed wider */
+.rdv-frame { position: relative; flex: none; background: var(--bg-elevated); }
+.rdv-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.rdv-inner img { display: block; width: 100%; height: 100%; }
+.rdv-inner svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
