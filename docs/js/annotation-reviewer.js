@@ -309,7 +309,9 @@ function initReviewUI(token) {
   window.addEventListener('resize', () => { if (isFullscreen()) drawFullscreenCanvas(); });
 
   document.addEventListener('keydown', (e) => {
-    if (!document.getElementById('rv-main').classList.contains('hidden')) {
+    const main = document.getElementById('rv-main');
+    // getClientRects is empty while another tab is showing, so shortcuts can't record decisions from there
+    if (!main.classList.contains('hidden') && main.getClientRects().length > 0) {
       handleKey(e, token);
     }
   });

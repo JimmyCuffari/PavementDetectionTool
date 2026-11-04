@@ -3,9 +3,14 @@ import { listAllFiles, downloadFileContent } from './drive.js';
 import { getDatasetRawDataFolder, getCurrentDataset } from './dataset-manager.js';
 import { makeSemaphore, toast } from './utils.js';
 import { classColor, haloColor, loadColorOverrides, shapeToSvg } from './label-draw.js';
+import {
+  initRoadEditor, resetEditor, onStreetLoaded, dirtyCount, save as saveEdits,
+  decorateFrame, onLayoutChanged, onOrientationChanged, onClassVisibilityChanged,
+} from './road-editor.js';
 
 // Road Viewer — lays a street's frames edge-to-edge as one continuous road,
 // with LabelMe annotations overlaid and per-class visibility toggles.
+// Editing lives in road-editor.js.
 
 const ORIENT_KEY  = 'pavement_road_viewer_orientation';
 const LABEL_KEY   = 'pavement_road_viewer_label_mode';
@@ -26,9 +31,12 @@ let root        = null;   // tab container
 let road        = null;   // scrollable road element
 let streets     = [];     // [{ id, name }]
 let streetsStale = true;
-let frames      = [];     // [{ name, imageId, shapes, w, h, dimsKnown, el, inner, loaded }]
-let classes     = [];     // [{ name, count }]
+let frames      = [];     // [{ name, imageId, shapes, w, h, dimsKnown, el, inner, svg, loaded, labelId, labelModified, labelLoadFailed, savedShapes, dirty }]
+let classes     = [];     // [{ name, count }] — append-only while a street is open: colors and `hidden` use these indexes
 let hidden      = new Set();
+let currentStreet = null; // { id, name, labelsFolderId }
+let streetSelection = ''; // street shown on the road, to restore if switching away is cancelled
+let loadedDatasetKey = null; // dataset the open street belongs to
 let blobUrls    = [];
 let loadToken   = 0;      // bumped on every street load; stale async work checks it
 let refDims     = { w: 1, h: 1 };
@@ -98,6 +106,8 @@ export function renderRoadViewer(container) {
         </div>
       </div>
 
+      <div id="rdv-edit-bar" class="rdv-toolbar"></div>
+
       <div id="rdv-labels" class="rdv-labels hidden"></div>
       <div id="rdv-empty" class="rdv-empty text-dim hidden"></div>
       <div id="rdv-road" class="rdv-road"></div>
@@ -108,8 +118,13 @@ export function renderRoadViewer(container) {
 
   road = container.querySelector('#rdv-road');
 
-  container.querySelector('#rdv-street').addEventListener('change', (e) => loadStreet(e.target.value));
-  container.querySelector('#rdv-refresh').addEventListener('click', () => listStreets(true));
+  container.querySelector('#rdv-street').addEventListener('change', (e) => {
+    if (!confirmDiscardEdits()) { e.target.value = streetSelection; return; }
+    loadStreet(e.target.value);
+  });
+  container.querySelector('#rdv-refresh').addEventListener('click', () => {
+    if (confirmDiscardEdits()) listStreets(true);
+  });
 
   container.querySelectorAll('[data-orient]').forEach(btn =>
     btn.addEventListener('click', () => setOrientation(btn.dataset.orient)));
@@ -142,6 +157,7 @@ export function renderRoadViewer(container) {
     if (idx === undefined) return;
     if (e.target.checked) hidden.delete(Number(idx)); else hidden.add(Number(idx));
     applyHidden();
+    onClassVisibilityChanged();
   });
   container.querySelector('#rdv-labels').addEventListener('click', (e) => {
     const action = e.target.dataset?.labelsAction;
@@ -149,6 +165,7 @@ export function renderRoadViewer(container) {
     hidden = action === 'none' ? new Set(classes.map((_, i) => i)) : new Set();
     root.querySelectorAll('[data-class-idx]').forEach(cb => { cb.checked = !hidden.has(Number(cb.dataset.classIdx)); });
     applyHidden();
+    onClassVisibilityChanged();
   });
 
   road.addEventListener('wheel', (e) => {
@@ -180,13 +197,44 @@ export function renderRoadViewer(container) {
     if (streetsStale) listStreets(false);
   });
 
+  initRoadEditor(container.querySelector('#rdv-edit-bar'), road, {
+    frames:      () => frames,
+    classes:     () => classes,
+    street:      () => currentStreet,
+    scale:       currentScale,
+    orientation: () => orientation,
+    isVisible:   () => road.getClientRects().length > 0,
+    isClassHidden: (name) => hidden.has(classes.findIndex(c => c.name === name)),
+    showClass,
+    renderFrameShapes,
+    refreshClasses,
+    refreshStatus: updateStatus,
+  });
+
   updateSegButtons();
   showEmpty('Open a dataset in the Datasets tab first.');
+}
+
+function datasetKey() {
+  return getCurrentDataset()?.driveFolderId ?? null;
+}
+
+function confirmDiscardEdits() {
+  const n = dirtyCount();
+  return !n || confirm(`Discard unsaved edits on ${n} frame${n === 1 ? '' : 's'}?`);
 }
 
 // Called by app.js when the active project/dataset changes
 export function refreshRoadViewer() {
   if (!root) return;
+  if (dirtyCount()) {
+    // This also fires when nothing relevant changed, and that mustn't throw away edits
+    if (datasetKey() === loadedDatasetKey) return;
+    const n = dirtyCount();
+    if (confirm(`The dataset changed, but ${n} frame${n === 1 ? ' has' : 's have'} unsaved label edits.\n\nOK saves them. Cancel discards them.`)) {
+      saveEdits();   // keeps running after the road below is cleared
+    }
+  }
   streetsStale = true;
   clearRoad();
   streets = [];
@@ -272,7 +320,7 @@ async function loadStreet(streetId) {
 
     const [imageFiles, labelFiles] = await Promise.all([
       listAllFiles(token, `'${framesFolder.id}' in parents and trashed=false`, 'id,name'),
-      labelsFolder ? listAllFiles(token, `'${labelsFolder.id}' in parents and trashed=false`, 'id,name') : [],
+      labelsFolder ? listAllFiles(token, `'${labelsFolder.id}' in parents and trashed=false`, 'id,name,modifiedTime') : [],
     ]);
     if (myToken !== loadToken) return;
 
@@ -290,14 +338,14 @@ async function loadStreet(streetId) {
     const labelSem = makeSemaphore(6);
     const labelled = await Promise.all(images.map(img => {
       const lf = labelByStem.get(img.name.replace(/\.[^.]+$/, ''));
-      if (!lf) return null;
+      if (!lf) return { json: null, file: null, failed: false };
       return labelSem(async () => {
-        if (myToken !== loadToken) return null;
+        if (myToken !== loadToken) return { json: null, file: lf, failed: true };
         try {
           const json = JSON.parse(new TextDecoder().decode(await downloadFileContent(token, lf.id)));
-          return json;
+          return { json, file: lf, failed: false };
         } catch {
-          return null;
+          return { json: null, file: lf, failed: true };   // the file exists: saving over it would lose its labels
         } finally {
           done++;
           status.textContent = `Loading labels ${done}/${labelByStem.size}…`;
@@ -308,7 +356,7 @@ async function loadStreet(streetId) {
 
     const classCounts = new Map();
     frames = images.map((img, i) => {
-      const json   = labelled[i];
+      const { json, file, failed } = labelled[i];
       const shapes = Array.isArray(json?.shapes) ? json.shapes : [];
       for (const s of shapes) {
         const name = s.label || '?';
@@ -318,12 +366,21 @@ async function loadStreet(streetId) {
       return {
         name: img.name, imageId: img.id, shapes, hasLabel: !!json,
         w: dimsKnown ? json.imageWidth : 0, h: dimsKnown ? json.imageHeight : 0,
-        dimsKnown, el: null, inner: null, loaded: false,
+        dimsKnown, el: null, inner: null, svg: null, loaded: false,
+        labelId: file?.id ?? null, labelModified: file?.modifiedTime ?? null, labelLoadFailed: failed,
+        savedShapes: JSON.stringify(shapes), dirty: false,
       };
     });
     classes = [...classCounts.entries()]
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => a.name.localeCompare(b.name));
+    currentStreet = {
+      id: streetId,
+      name: streets.find(s => s.id === streetId)?.name ?? '',
+      labelsFolderId: labelsFolder?.id ?? null,
+    };
+    streetSelection = streetId;
+    loadedDatasetKey = datasetKey();
 
     // Reference size for frames whose dimensions aren't known until their image loads
     const known = frames.find(f => f.dimsKnown);
@@ -338,9 +395,12 @@ async function loadStreet(streetId) {
 
     renderLabelToggles();
     buildRoad();
-    const labelledCount = frames.filter(f => f.hasLabel).length;
-    const shapeCount = classes.reduce((n, c) => n + c.count, 0);
-    status.textContent = `${frames.length} frames · ${labelledCount} labeled · ${shapeCount} labels`;
+    updateStatus();
+    onStreetLoaded();
+    const lockedCount = frames.filter(f => f.labelLoadFailed).length;
+    if (lockedCount) {
+      toast(`${lockedCount} label file${lockedCount === 1 ? '' : 's'} failed to load. Those frames are locked against editing.`, 'error', 8000);
+    }
   } catch (err) {
     if (myToken !== loadToken) return;
     showEmpty(`Failed to load street: ${err.message}`);
@@ -356,7 +416,11 @@ function clearRoad() {
   frames = [];
   classes = [];
   hidden = new Set();
+  currentStreet = null;
+  streetSelection = '';
+  loadedDatasetKey = null;
   if (!root) return;
+  resetEditor();
   road.innerHTML = '';
   root.querySelector('#rdv-labels').innerHTML = '';
   root.querySelector('#rdv-labels').classList.add('hidden');
@@ -369,6 +433,39 @@ function showEmpty(message) {
   el.textContent = message;
   el.classList.remove('hidden');
   road.classList.add('hidden');
+}
+
+function updateStatus() {
+  if (!frames.length) return;
+  const labelledCount = frames.filter(f => f.hasLabel).length;
+  const shapeCount = frames.reduce((n, f) => n + f.shapes.length, 0);
+  root.querySelector('#rdv-status').textContent = `${frames.length} frames · ${labelledCount} labeled · ${shapeCount} labels`;
+}
+
+// Recounts after an edit. Classes that first appear are appended, and ones that reach zero stay
+// listed, so existing indexes keep pointing at the same class.
+function refreshClasses() {
+  const counts = new Map();
+  for (const f of frames) {
+    for (const s of f.shapes) {
+      const name = s.label || '?';
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }
+  }
+  for (const c of classes) c.count = counts.get(c.name) || 0;
+  for (const [name, count] of counts) {
+    if (!classes.some(c => c.name === name)) classes.push({ name, count });
+  }
+  applyColors();
+  renderLabelToggles();
+  updateStatus();
+}
+
+function showClass(name) {
+  const idx = classes.findIndex(c => c.name === name);
+  if (idx < 0 || !hidden.delete(idx)) return;
+  applyHidden();
+  renderLabelToggles();
 }
 
 // ── Label toggles ─────────────────────────────────────────────────────────────
@@ -425,7 +522,6 @@ function buildRoad() {
   root.querySelector('#rdv-empty').classList.add('hidden');
   road.classList.remove('hidden');
   road.innerHTML = '';
-  const classIdx = new Map(classes.map((c, i) => [c.name, i]));
   const frag = document.createDocumentFragment();
 
   frames.forEach((f, i) => {
@@ -439,32 +535,25 @@ function buildRoad() {
     img.draggable = false;
     inner.appendChild(img);
 
-    if (f.shapes.length) {
-      const svg = document.createElementNS(SVG_NS, 'svg');
-      svg.setAttribute('viewBox', `0 0 ${f.w} ${f.h}`);
-      svg.setAttribute('preserveAspectRatio', 'none');
-      for (const shape of f.shapes) {
-        const node = shapeToSvg(shape);
-        if (!node) continue;
-        // A wider contrasting copy underneath keeps the shape visible on any background
-        const halo = node.cloneNode();
-        halo.setAttribute('class', 'rdv-halo');
-        node.setAttribute('class', 'rdv-shape');
-        const g = document.createElementNS(SVG_NS, 'g');
-        g.dataset.classIdx = classIdx.get(shape.label || '?');
-        g.append(halo, node);
-        svg.appendChild(g);
-      }
-      inner.appendChild(svg);
-    }
+    f.svg = document.createElementNS(SVG_NS, 'svg');
+    f.svg.setAttribute('preserveAspectRatio', 'none');
+    inner.appendChild(f.svg);
 
     // Section name sits outside the rotated inner box so it always reads upright
     const section = document.createElement('div');
     section.className = 'rdv-section';
     section.textContent = f.name.replace(/\.[^.]+$/, '');
     el.append(inner, section);
+    if (f.labelLoadFailed) {
+      el.classList.add('rdv-frame-locked');
+      const notice = document.createElement('div');
+      notice.className = 'rdv-locked-note';
+      notice.textContent = 'Label file failed to load. Locked against editing.';
+      el.appendChild(notice);
+    }
     f.el = el;
     f.inner = inner;
+    renderFrameShapes(f);
     frag.appendChild(el);
   });
 
@@ -474,6 +563,26 @@ function buildRoad() {
   road.scrollLeft = 0;
   relayout();
   frames.forEach(f => observer.observe(f.el));
+}
+
+// Redraws one frame's labels, plus any selection handles or in-progress drawing on it
+function renderFrameShapes(f) {
+  f.svg.setAttribute('viewBox', `0 0 ${f.w} ${f.h}`);
+  f.svg.replaceChildren();
+  f.shapes.forEach((shape, i) => {
+    const node = shapeToSvg(shape);
+    if (!node) return;
+    // A wider contrasting copy underneath keeps the shape visible on any background
+    const halo = node.cloneNode();
+    halo.setAttribute('class', 'rdv-halo');
+    node.setAttribute('class', 'rdv-shape');
+    const g = document.createElementNS(SVG_NS, 'g');
+    g.dataset.classIdx = classes.findIndex(c => c.name === (shape.label || '?'));
+    g.dataset.shapeIdx = i;
+    g.append(halo, node);
+    f.svg.appendChild(g);
+  });
+  decorateFrame(f);
 }
 
 // Space available across the road (width when vertical, height when horizontal), minus any ruler gutter
@@ -516,6 +625,7 @@ function relayout(focus = { x: 0, y: 0 }) {
   const scale = currentScale();
   frames.forEach(f => sizeFrame(f, scale));
   restoreAnchor(anchor, focus);
+  onLayoutChanged();
 }
 
 function getAnchor(focus) {
@@ -564,6 +674,7 @@ function restoreAnchor({ vertical: wasVertical, idx, frac, crossFrac }, focus) {
 
 function setOrientation(next) {
   if (next === orientation) return;
+  onOrientationChanged();   // an in-progress drawing is pinned to the old layout
   orientation = next;
   writePref(ORIENT_KEY, next);
   updateSegButtons();
@@ -603,11 +714,14 @@ async function loadFrameImage(f) {
   if (!img || myToken !== loadToken) return;
   const el = f.inner.querySelector('img');
   el.src = img.src;
-  if (!f.dimsKnown && (img.naturalWidth !== f.w || img.naturalHeight !== f.h)) {
-    f.w = img.naturalWidth;
-    f.h = img.naturalHeight;
+  if (!f.dimsKnown) {
     f.dimsKnown = true;
-    sizeFrame(f, currentScale());
+    if (img.naturalWidth !== f.w || img.naturalHeight !== f.h) {
+      f.w = img.naturalWidth;
+      f.h = img.naturalHeight;
+      sizeFrame(f, currentScale());
+      renderFrameShapes(f);
+    }
   }
 }
 
