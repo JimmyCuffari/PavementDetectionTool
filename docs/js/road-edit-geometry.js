@@ -136,11 +136,57 @@ export function clipShapeToFrame(type, pts, w, h) {
 // Moves a shape by (dx, dy), reducing the move so its points stay inside the frame. A shape that
 // already pokes outside may move back in, but never further out.
 export function movePointsWithin(pts, dx, dy, w, h) {
+  const limits = moveLimits(pts, w, h);
+  const cdx = clamp(dx, limits.minDx, limits.maxDx);
+  const cdy = clamp(dy, limits.minDy, limits.maxDy);
+  return pts.map(([x, y]) => roundPoint([x + cdx, y + cdy]));
+}
+
+// How far a set of points may move and stay inside the frame. The ranges always include zero.
+export function moveLimits(pts, w, h) {
   const xs = pts.map(p => p[0]);
   const ys = pts.map(p => p[1]);
-  const cdx = clamp(dx, Math.min(0, -Math.min(...xs)), Math.max(0, w - Math.max(...xs)));
-  const cdy = clamp(dy, Math.min(0, -Math.min(...ys)), Math.max(0, h - Math.max(...ys)));
-  return pts.map(([x, y]) => roundPoint([x + cdx, y + cdy]));
+  return {
+    minDx: Math.min(0, -Math.min(...xs)),
+    maxDx: Math.max(0, w - Math.max(...xs)),
+    minDy: Math.min(0, -Math.min(...ys)),
+    maxDy: Math.max(0, h - Math.max(...ys)),
+  };
+}
+
+// Combines limits, so that things moving together stop as soon as any one of them has to
+export function intersectLimits(a, b) {
+  return {
+    minDx: Math.max(a.minDx, b.minDx),
+    maxDx: Math.min(a.maxDx, b.maxDx),
+    minDy: Math.max(a.minDy, b.minDy),
+    maxDy: Math.min(a.maxDy, b.maxDy),
+  };
+}
+
+export function pointInBox([x, y], box) {
+  return x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1;
+}
+
+// True when the whole shape is inside the box. A circle stores only its centre and one rim point,
+// so its extent comes from the radius.
+export function shapeInBox(shape, box) {
+  const pts = shape.points || [];
+  if (!pts.length) return false;
+  if (shape.shape_type === 'circle' && pts.length >= 2) {
+    const [[cx, cy], [rx, ry]] = pts;
+    const r = Math.hypot(rx - cx, ry - cy);
+    return cx - r >= box.x0 && cx + r <= box.x1 && cy - r >= box.y0 && cy + r <= box.y1;
+  }
+  return pts.every(p => pointInBox(p, box));
+}
+
+// Shift that brings the span lo..hi inside min..max. A span too big to fit is centred instead.
+export function fitShift(lo, hi, min, max) {
+  if (hi - lo > max - min) return (min + max) / 2 - (lo + hi) / 2;
+  if (lo < min) return min - lo;
+  if (hi > max) return max - hi;
+  return 0;
 }
 
 // Closest edge to p. Returns { index, dist, point } where a new vertex at `point` goes at index + 1.
