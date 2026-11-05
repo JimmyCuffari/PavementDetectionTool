@@ -41,6 +41,7 @@ let blobUrls    = [];
 let loadToken   = 0;      // bumped on every street load; stale async work checks it
 let refDims     = { w: 1, h: 1 };
 let zoom        = 100;    // percent of fit
+let lastLayout  = null;   // last relayout's anchor, reused by the next zoom step if nothing has moved
 let orientation = readPref(ORIENT_KEY, ['vertical', 'horizontal']);
 let labelMode   = readPref(LABEL_KEY, ['dark', 'light']);          // label colors tuned for dark or light imagery
 let sectionMode = readPref(SECTION_KEY, SECTION_MODES.map(m => m.value));
@@ -173,7 +174,7 @@ export function renderRoadViewer(container) {
     if (e.ctrlKey) {
       e.preventDefault();
       const rect = road.getBoundingClientRect();
-      setZoom(zoom * Math.exp(-e.deltaY * 0.002), { x: e.clientX - rect.left, y: e.clientY - rect.top });
+      setZoom(zoom * Math.exp(-e.deltaY * 0.002), { x: e.clientX - rect.left - road.clientLeft, y: e.clientY - rect.top - road.clientTop });
       return;
     }
     // Plain wheel scrolls along the road in horizontal mode
@@ -561,6 +562,7 @@ function buildRoad() {
   applyColors();
   road.scrollTop = 0;
   road.scrollLeft = 0;
+  lastLayout = null;
   relayout();
   frames.forEach(f => observer.observe(f.el));
 }
@@ -619,37 +621,54 @@ function sizeFrame(f, scale) {
 // defaults to the top-left corner) over the same spot of the same frame
 function relayout(focus = { x: 0, y: 0 }) {
   if (!frames.length || !frames[0].el) return;
-  const anchor = getAnchor(focus);
+  const anchor = heldAnchor(focus) ?? getAnchor(focus);
   road.classList.toggle('rdv-horizontal', orientation === 'horizontal');
   SECTION_MODES.forEach(m => road.classList.toggle(`rdv-sec-${m.value}`, m.value === sectionMode));
   const scale = currentScale();
   frames.forEach(f => sizeFrame(f, scale));
   restoreAnchor(anchor, focus);
+  lastLayout = { focus, anchor, orientation, scrollLeft: road.scrollLeft, scrollTop: road.scrollTop };
   onLayoutChanged();
+}
+
+// While the pointer and scroll position haven't moved, zoom steps share the first step's anchor.
+// Re-measuring each time would add up scroll rounding, and would lose the spot on any step where
+// there's no room to scroll, such as while a centred frame is narrower than the road.
+function heldAnchor(focus) {
+  const last = lastLayout;
+  const unchanged = last
+    && last.focus.x === focus.x && last.focus.y === focus.y
+    && last.orientation === orientation
+    && last.scrollLeft === road.scrollLeft && last.scrollTop === road.scrollTop;
+  return unchanged ? last.anchor : null;
+}
+
+// A frame's box in the road's scrollable coordinates, unrounded
+function frameExtent(el, vertical) {
+  const r = el.getBoundingClientRect();
+  const outer = road.getBoundingClientRect();
+  const left = r.left - outer.left - road.clientLeft + road.scrollLeft;
+  const top  = r.top  - outer.top  - road.clientTop  + road.scrollTop;
+  return vertical
+    ? { start: top, size: r.height, crossStart: left, crossSize: r.width }
+    : { start: left, size: r.width, crossStart: top, crossSize: r.height };
 }
 
 function getAnchor(focus) {
   const vertical = !road.classList.contains('rdv-horizontal');
-  const along  = vertical ? focus.y : focus.x;
-  const cross  = vertical ? focus.x : focus.y;
-  const pos    = (vertical ? road.scrollTop : road.scrollLeft) + along;
-  const crossScroll = vertical ? road.scrollLeft : road.scrollTop;
-  const crossTotal  = vertical ? road.scrollWidth : road.scrollHeight;
-  const anchor = {
-    vertical,
-    idx: frames.length - 1, frac: 0,
-    crossFrac: crossTotal ? (crossScroll + cross) / crossTotal : 0,
-  };
+  const along = (vertical ? road.scrollTop : road.scrollLeft) + (vertical ? focus.y : focus.x);
+  const cross = (vertical ? road.scrollLeft : road.scrollTop) + (vertical ? focus.x : focus.y);
+  const anchor = { vertical, idx: frames.length - 1, frac: 0, crossFrac: 0 };
   for (let i = 0; i < frames.length; i++) {
-    const el    = frames[i].el;
-    const start = vertical ? el.offsetTop : el.offsetLeft;
-    const size  = vertical ? el.offsetHeight : el.offsetWidth;
-    if (pos < start + size) {
+    const { start, size } = frameExtent(frames[i].el, vertical);
+    if (along < start + size) {
       anchor.idx  = i;
-      anchor.frac = size ? Math.max(0, (pos - start) / size) : 0;
+      anchor.frac = size ? Math.max(0, (along - start) / size) : 0;
       break;
     }
   }
+  const { crossStart, crossSize: crossLength } = frameExtent(frames[anchor.idx].el, vertical);
+  anchor.crossFrac = crossLength ? (cross - crossStart) / crossLength : 0;
   return anchor;
 }
 
@@ -659,17 +678,12 @@ function restoreAnchor({ vertical: wasVertical, idx, frac, crossFrac }, focus) {
   const vertical = orientation === 'vertical';
   const along = vertical ? focus.y : focus.x;
   const cross = vertical ? focus.x : focus.y;
+  const { start, size, crossStart, crossSize: crossLength } = frameExtent(el, vertical);
+  const alongPos = start + frac * size - along;
   // Sideways position only carries over within the same orientation
-  const crossPos = wasVertical === vertical
-    ? crossFrac * (vertical ? road.scrollWidth : road.scrollHeight) - cross
-    : 0;
-  if (vertical) {
-    road.scrollTop  = el.offsetTop + frac * el.offsetHeight - along;
-    road.scrollLeft = crossPos;
-  } else {
-    road.scrollLeft = el.offsetLeft + frac * el.offsetWidth - along;
-    road.scrollTop  = crossPos;
-  }
+  const crossPos = wasVertical === vertical ? crossStart + crossFrac * crossLength - cross : 0;
+  road.scrollTop  = vertical ? alongPos : crossPos;
+  road.scrollLeft = vertical ? crossPos : alongPos;
 }
 
 function setOrientation(next) {

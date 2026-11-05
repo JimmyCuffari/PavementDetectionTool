@@ -300,20 +300,20 @@ function promptForClass() {
 
 // ── Coordinates ───────────────────────────────────────────────────────────────
 
+// Both use the frame's drawn box, not the zoom scale, so they match what's on screen exactly even
+// when the road's size has just changed and the frames haven't been re-laid out yet
 function clientToFrame(f, cx, cy) {
   const r = f.inner.getBoundingClientRect();
-  const s = ctx.scale();
   return ctx.orientation() === 'vertical'
-    ? [(cx - r.left) / s, (cy - r.top) / s]
-    : [(r.bottom - cy) / s, (cx - r.left) / s];
+    ? [(cx - r.left) * f.w / r.width, (cy - r.top) * f.h / r.height]
+    : [(r.bottom - cy) * f.w / r.height, (cx - r.left) * f.h / r.width];
 }
 
 function frameToClient(f, [x, y]) {
   const r = f.inner.getBoundingClientRect();
-  const s = ctx.scale();
   return ctx.orientation() === 'vertical'
-    ? [r.left + x * s, r.top + y * s]
-    : [r.left + y * s, r.bottom - x * s];
+    ? [r.left + x * r.width / f.w, r.top + y * r.height / f.h]
+    : [r.left + y * r.width / f.h, r.bottom - x * r.height / f.w];
 }
 
 function frameAt(target) {
@@ -760,6 +760,8 @@ function startMove(e, items) {
 
 function startMarquee(e, additive, clickHit = null) {
   if (!additive && selection.length) setSelection([]);
+  const [first] = ctx.frames();
+  if (!first) return;
   drag = {
     kind: 'marquee',
     additive,
@@ -767,8 +769,8 @@ function startMarquee(e, additive, clickHit = null) {
     pointerId: e.pointerId,
     startX: e.clientX,
     startY: e.clientY,
-    originX: e.clientX + road.scrollLeft,   // stays on the same spot of the road while it scrolls
-    originY: e.clientY + road.scrollTop,
+    // Held in image coordinates, so the start stays on the same spot through scrolling and zooming
+    origin: { frame: first, point: clientToFrame(first, e.clientX, e.clientY) },
     x: e.clientX,
     y: e.clientY,
     started: false,
@@ -828,8 +830,7 @@ function applyMove(p) {
 }
 
 function marqueeRect() {
-  const x0 = drag.originX - road.scrollLeft;
-  const y0 = drag.originY - road.scrollTop;
+  const [x0, y0] = frameToClient(drag.origin.frame, drag.origin.point);
   return { left: Math.min(x0, drag.x), right: Math.max(x0, drag.x), top: Math.min(y0, drag.y), bottom: Math.max(y0, drag.y) };
 }
 
