@@ -1310,6 +1310,12 @@ input[type="color"].rv-color-pick::-webkit-color-swatch { border: none; border-r
 .rdv-selinfo { font-size: 13px; line-height: 1.4; color: var(--text-dim); min-width: 11em; min-height: 1.4em; white-space: nowrap; }   /* reserved, so selecting can't re-wrap the toolbar and shift the road */
 .rdv-marquee { position: fixed; z-index: 50; pointer-events: none; border: 1px dashed #fff; outline: 1px dashed rgba(0, 0, 0, 0.7); background: rgba(255, 255, 255, 0.12); }
 .rdv-inner .rdv-handle.rdv-handle-selected { fill: var(--accent); stroke: #fff; }
+.rdv-wand-val { min-width: 2em; color: var(--text); }
+.rdv-wand-info { font-size: 13px; line-height: 1.4; color: var(--text-dim); min-width: 22em; min-height: 1.4em; }
+.rdv-wand-info.rdv-wand-warn { color: var(--warning); }
+.rdv-inner .rdv-wand-box { fill: none; stroke: #fff; stroke-width: 1.5; stroke-dasharray: 4 3; }
+.rdv-inner .rdv-wand-preview { fill: rgba(0, 200, 255, 0.25); stroke: #00e0ff; stroke-width: 2; stroke-dasharray: 6 4; stroke-linejoin: round; }
+.rdv-inner .rdv-wand-preview.rdv-wand-warn { fill: rgba(255, 80, 80, 0.25); stroke: #ff5050; }
 .rdv-road .rdv-frame-active { z-index: 2; }   /* keeps handles and drawings above the next frame's image */
 .rdv-road g.rdv-selected .rdv-shape { stroke-width: 3; }
 .rdv-road g.rdv-selected .rdv-halo { stroke: #fff; stroke-opacity: 1; stroke-width: 6; }

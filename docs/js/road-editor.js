@@ -3,6 +3,7 @@ import { listAllFiles, downloadFileContent, upsertFile, findOrCreateFolder } fro
 import { getDatasetRawDataFolder } from './dataset-manager.js';
 import { makeSemaphore, toast } from './utils.js';
 import { shapeToSvg } from './label-draw.js';
+import { colorRegionPolygon } from './road-color-select.js';
 import {
   clamp, roundPoint, shapeArea, clipShapeToFrame, nearestEdge, moveLimits, intersectLimits,
   pointInBox, shapeInBox, fitShift,
@@ -23,7 +24,8 @@ const NEW_CLASS      = '__new__';
 const TOOLS = [
   { value: 'select',    key: 'v', label: 'Select',    title: 'Click a label, or drag a box around several, to move them. Shift+click adds or removes; Shift+drag starts a box on top of a label (V)' },
   { value: 'vertices',  key: 'a', label: 'Vertices',  title: 'Drag a box around vertices, then drag one to move them together or press Del. Shift adds to the selection (A)' },
-  { value: 'polygon',  key: 'p', label: 'Polygon',   title: 'Click to add points. Enter, double-click or the first point finishes (P)' },
+  { value: 'color',     key: 'w', label: 'Color',     title: 'Click a crack or patch to outline the area of similar colour, then tune Sensitivity and press Enter. Drag a box first to keep it from spreading. Works within one frame, and by colour alone, so same-coloured shadows or stains are picked up too (W)' },
+  { value: 'polygon', key: 'p', label: 'Polygon',   title: 'Click to add points. Enter, double-click or the first point finishes (P)' },
   { value: 'rectangle', key: 'r', label: 'Rectangle', title: 'Drag to draw a rectangle (R)' },
   { value: 'linestrip', key: 'l', label: 'Line',      title: 'Click to add points, Enter or double-click finishes (L). Lines only export in detect mode; segment mode skips them.' },
 ];
@@ -48,6 +50,16 @@ let saveProgress = '';
 let reviewedKeys = new Set();   // "street/label.json" entries with a review decision
 let warnedFrames = new Set();
 let reviewToken  = 0;
+
+// Color tool
+const WAND_PREF         = 'pavement_tool_rdv_wand_sensitivity';
+const WAND_MIN_AREA     = 20;    // px² — anything smaller is a stray click
+const WAND_MAX_COVERAGE = 0.6;   // more of the box or frame than this has probably leaked
+const PIXEL_CACHE_SIZE  = 3;
+let wand            = null;      // { frame, box, seed, result, message, warn } — box and seed in image pixels
+let wandSensitivity = readWandSensitivity();
+let wandQueued      = false;
+const pixelCache    = new Map(); // frame → ImageData, most recently used last
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
@@ -78,6 +90,16 @@ export function initRoadEditor(barEl, roadEl, context) {
       <button class="btn btn-ghost btn-sm" id="rdv-redo" title="Redo (Ctrl+Y)">Redo</button>
       <span id="rdv-selinfo" class="rdv-selinfo"></span>
     </div>
+    <div class="rdv-edit-group hidden" id="rdv-wand">
+      <div class="rdv-field" title="Higher takes in a wider range of colours">
+        <label for="rdv-wand-sens">Sensitivity</label>
+        <input type="range" id="rdv-wand-sens" min="0" max="100" step="1" />
+        <span id="rdv-wand-val" class="rdv-wand-val"></span>
+      </div>
+      <button class="btn btn-primary btn-sm" id="rdv-wand-accept" title="Add this outline as a label (Enter)">Accept</button>
+      <button class="btn btn-ghost btn-sm" id="rdv-wand-cancel" title="Clear the outline and box (Esc)">Cancel</button>
+      <span id="rdv-wand-info" class="rdv-wand-info"></span>
+    </div>
     <div class="rdv-edit-group" id="rdv-edit-actions">
       <span id="rdv-unsaved" class="rdv-unsaved"></span>
       <button class="btn btn-primary btn-sm" id="rdv-save" title="Save changed frames to Drive (Ctrl+S)">Save</button>
@@ -90,6 +112,19 @@ export function initRoadEditor(barEl, roadEl, context) {
   bar.querySelectorAll('[data-tool]').forEach(btn =>
     btn.addEventListener('click', () => setTool(btn.dataset.tool)));
   bar.querySelector('#rdv-class').addEventListener('change', onClassChange);
+  const sens = bar.querySelector('#rdv-wand-sens');
+  sens.value = wandSensitivity;
+  sens.addEventListener('input', () => {
+    wandSensitivity = Number(sens.value);
+    bar.querySelector('#rdv-wand-val').textContent = wandSensitivity;
+    scheduleWand();
+  });
+  sens.addEventListener('change', () => {
+    writeWandSensitivity(wandSensitivity);
+    sens.blur();   // hand Enter and Esc back to the road
+  });
+  bar.querySelector('#rdv-wand-accept').addEventListener('click', acceptWand);
+  bar.querySelector('#rdv-wand-cancel').addEventListener('click', () => setWand(null));
   bar.querySelector('#rdv-rename').addEventListener('click', renameClass);
   bar.querySelector('#rdv-delete').addEventListener('click', deleteSelection);
   bar.querySelector('#rdv-cut').addEventListener('click', cutSelection);
@@ -126,6 +161,8 @@ export function resetEditor() {
   selection = [];
   draft     = null;
   drag      = null;
+  wand      = null;
+  pixelCache.clear();
   removeMarquee();
   undoStack = [];
   redoStack = [];
@@ -150,7 +187,7 @@ export function dirtyCount() {
 function setEditing(next) {
   editing = next;
   cancelDraft();
-  if (!editing) setSelection([]);
+  if (!editing) { setSelection([]); setWand(null); }
   updateBar();
   if (tool === 'vertices') renderAllFrames();
 }
@@ -160,7 +197,7 @@ function setTool(next) {
   const handlesChange = changed && (tool === 'vertices' || next === 'vertices');
   tool = next;
   cancelDraft();
-  if (changed) setSelection([]);
+  if (changed) { setSelection([]); setWand(null); }
   updateBar();
   if (handlesChange) renderAllFrames();
 }
@@ -198,6 +235,12 @@ function updateBar() {
 
   bar.querySelector('#rdv-edit-tools').classList.toggle('hidden', !editing);
   bar.querySelector('#rdv-edit-actions').classList.toggle('hidden', !editing && !dirty);
+  bar.querySelector('#rdv-wand').classList.toggle('hidden', !(editing && tool === 'color'));
+  bar.querySelector('#rdv-wand-val').textContent = wandSensitivity;
+  bar.querySelector('#rdv-wand-accept').disabled = !wandUsable();
+  const info = bar.querySelector('#rdv-wand-info');
+  info.textContent = wand?.message ?? 'Click a crack or patch, or drag a box first';
+  info.classList.toggle('rdv-wand-warn', !!wand?.warn);
   bar.querySelector('#rdv-rename').disabled = !currentClassHasLabels();
   bar.querySelector('#rdv-delete').disabled = !selection.length;
   bar.querySelector('#rdv-cut').disabled    = !selection.length;
@@ -401,9 +444,10 @@ function setSelection(next) {
   const prev = selectedFrames();
   selection = next;
   const current = selectedFrames();
-  for (const f of prev) if (!current.includes(f)) f.el.classList.remove('rdv-frame-active');
-  for (const f of current) f.el.classList.add('rdv-frame-active');
-  new Set([...prev, ...current]).forEach(f => ctx.renderFrameShapes(f));
+  new Set([...prev, ...current]).forEach(f => {
+    refreshActive(f);
+    ctx.renderFrameShapes(f);
+  });
   const labels = selectedLabels();
   if (labels.size === 1) currentClass = [...labels][0] || currentClass;
   updateBar();
@@ -424,6 +468,13 @@ export function decorateFrame(f) {
     if (f.shapes[idx]) f.svg.appendChild(buildHandles(f.shapes[idx], idx));
   }
   if (draft?.frame === f) f.svg.appendChild(buildDraft());
+  if (wand?.frame === f) f.svg.appendChild(buildWand());
+}
+
+// Raised above the next frame's picture while it has handles, a drawing or a Color preview on it
+function refreshActive(f) {
+  const active = selection.some(s => s.frame === f) || draft?.frame === f || wand?.frame === f;
+  f.el.classList.toggle('rdv-frame-active', active);
 }
 
 function buildHandles(shape, shapeIdx, chosen) {
@@ -673,6 +724,7 @@ function onPointerDown(e) {
 
   if (tool === 'vertices') { pressWithVerticesTool(e); return; }
   if (tool === 'select')   { pressWithSelectTool(e); return; }
+  if (tool === 'color')    { pressWithColorTool(e); return; }
 
   if (tool === 'rectangle') {
     const frame = frameAt(e.target);
@@ -801,6 +853,10 @@ function followPointer(cx, cy) {
     [drag.x, drag.y] = clampToRoad(cx, cy);
     if (!beginDragOnce(cx, cy)) return;
     drawMarquee();
+  } else if (drag?.kind === 'wandbox') {
+    if (!beginDragOnce(cx, cy)) return;
+    const end = clientToFrame(drag.frame, ...clampToRoad(cx, cy));
+    setWand({ frame: drag.frame, box: pixelBox(drag.frame, drag.start, end), seed: null, result: null });
   } else if (drag) {
     if (!beginDragOnce(cx, cy)) return;
     applyMove(clientToFrame(drag.anchor, cx, cy));
@@ -897,6 +953,12 @@ function onPointerUp(e) {
     return;
   }
   drag = null;
+  if (current.kind === 'wandbox') {
+    if (!current.started) { seedWand(current.frame, clientToFrame(current.frame, e.clientX, e.clientY)); return; }
+    const { box } = wand ?? {};
+    if (!box || box.x1 - box.x0 < 3 || box.y1 - box.y0 < 3) setWand(null);
+    return;
+  }
   if (current.kind === 'rectangle') {
     if (road.hasPointerCapture(e.pointerId)) road.releasePointerCapture(e.pointerId);
     draft.points.push(clientToFrame(draft.frame, ...clampToRoad(e.clientX, e.clientY)));
@@ -917,6 +979,7 @@ function onPointerCancel() {
   const current = drag;
   drag = null;
   if (current.kind === 'marquee') { removeMarquee(); return; }
+  if (current.kind === 'wandbox') { if (current.started) setWand(null); return; }
   if (current.kind === 'rectangle') { cancelDraft(); return; }
   if (current.started) {
     current.frames.forEach((f, i) => {
@@ -1020,7 +1083,7 @@ function cancelDraft() {
   const { frame } = draft;
   draft = null;
   if (drag?.kind === 'rectangle') drag = null;
-  if (!selectedFrames().includes(frame)) frame.el.classList.remove('rdv-frame-active');
+  refreshActive(frame);
   ctx.renderFrameShapes(frame);
 }
 
@@ -1074,6 +1137,10 @@ function onKeyDown(e) {
   }
   if (e.altKey) return;
 
+  if (tool === 'color' && wand) {
+    if (e.key === 'Enter')  { e.preventDefault(); acceptWand(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); setWand(null); return; }
+  }
   if (draft) {
     if (e.key === 'Enter')     { e.preventDefault(); finishDraft(); return; }
     if (e.key === 'Escape')    { e.preventDefault(); cancelDraft(); return; }
@@ -1088,6 +1155,183 @@ function onKeyDown(e) {
 
   const next = TOOLS.find(t => t.key === key);
   if (next) { e.preventDefault(); setTool(next.value); }
+}
+
+// ── Color tool ────────────────────────────────────────────────────────────────
+
+function readWandSensitivity() {
+  try {
+    const stored = localStorage.getItem(WAND_PREF);
+    const value = Number(stored);
+    if (stored !== null && Number.isFinite(value) && value >= 0 && value <= 100) return value;
+  } catch { /* storage blocked: use the default */ }
+  return 30;
+}
+
+function writeWandSensitivity(value) {
+  try { localStorage.setItem(WAND_PREF, String(value)); } catch { /* storage blocked: not remembered */ }
+}
+
+function pressWithColorTool(e) {
+  const frame = frameAt(e.target);
+  if (!frame || !ensureDrawable(frame)) return;
+  if (selection.length) setSelection([]);
+  drag = {
+    kind: 'wandbox',
+    frame,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    started: false,
+    start: clientToFrame(frame, e.clientX, e.clientY),
+  };
+}
+
+// Whole-pixel box between two points, kept inside the frame. x1 and y1 are exclusive.
+function pixelBox(f, a, b) {
+  return {
+    x0: Math.floor(clamp(Math.min(a[0], b[0]), 0, f.w)),
+    y0: Math.floor(clamp(Math.min(a[1], b[1]), 0, f.h)),
+    x1: Math.ceil(clamp(Math.max(a[0], b[0]), 0, f.w)),
+    y1: Math.ceil(clamp(Math.max(a[1], b[1]), 0, f.h)),
+  };
+}
+
+function setWand(next) {
+  const prev = wand?.frame;
+  wand = next;
+  for (const f of new Set([prev, next?.frame])) {
+    if (!f) continue;
+    refreshActive(f);
+    ctx.renderFrameShapes(f);
+  }
+  updateBar();
+}
+
+// A click inside the current box grows within it. Anywhere else drops the box.
+function seedWand(frame, [x, y]) {
+  const seed = [clamp(Math.floor(x), 0, frame.w - 1), clamp(Math.floor(y), 0, frame.h - 1)];
+  const box = wand?.frame === frame && wand.box
+    && seed[0] >= wand.box.x0 && seed[0] < wand.box.x1 && seed[1] >= wand.box.y0 && seed[1] < wand.box.y1
+    ? wand.box : null;
+  wand = { frame, box, seed, result: null };
+  computeWand();
+}
+
+// The slider can fire faster than the region grows on a big frame, so recompute once per frame
+function scheduleWand() {
+  if (wandQueued || !wand?.seed) return;
+  wandQueued = true;
+  requestAnimationFrame(() => {
+    wandQueued = false;
+    computeWand();
+  });
+}
+
+function computeWand() {
+  if (!wand?.seed) return;
+  const { frame } = wand;
+  const pixels = framePixels(frame);
+  wand.result = null;
+  wand.warn = false;
+  if (!pixels) {
+    wand.message = "This frame's picture hasn't loaded yet";
+    wand.warn = true;
+  } else {
+    // Labels are in the picture's own pixels, but allow for a frame whose size was guessed
+    const sx = pixels.width / frame.w;
+    const sy = pixels.height / frame.h;
+    const seed = [clamp(Math.floor(wand.seed[0] * sx), 0, pixels.width - 1), clamp(Math.floor(wand.seed[1] * sy), 0, pixels.height - 1)];
+    const box = wand.box && {
+      x0: Math.floor(wand.box.x0 * sx), y0: Math.floor(wand.box.y0 * sy),
+      x1: Math.ceil(wand.box.x1 * sx), y1: Math.ceil(wand.box.y1 * sy),
+    };
+    const r = colorRegionPolygon(pixels, seed, wandSensitivity, box || undefined);
+    if (r) {
+      wand.result = { ...r, area: r.area / (sx * sy), points: r.points.map(([x, y]) => roundPoint([x / sx, y / sy])) };
+      if (wand.result.area < WAND_MIN_AREA) {
+        wand.message = 'Too small. Raise the sensitivity';
+        wand.warn = true;
+      } else if (r.coverage > WAND_MAX_COVERAGE) {
+        wand.message = `Matched most of the ${box ? 'box' : 'frame'}. Lower the sensitivity or drag a box`;
+        wand.warn = true;
+      } else {
+        wand.message = `${Math.round(wand.result.area).toLocaleString()} px², ${r.points.length} points. Enter to add`;
+      }
+    }
+  }
+  refreshActive(frame);
+  ctx.renderFrameShapes(frame);
+  updateBar();
+}
+
+function wandUsable() {
+  const r = wand?.result;
+  return !!r && r.points.length >= 3 && r.area >= WAND_MIN_AREA;
+}
+
+// Reads a frame's picture at full size. Kept for the last few frames, since each is several MB.
+function framePixels(f) {
+  if (pixelCache.has(f)) {
+    const cached = pixelCache.get(f);
+    pixelCache.delete(f);
+    pixelCache.set(f, cached);
+    return cached;
+  }
+  const img = f.inner.querySelector('img');
+  if (!img?.complete || !img.naturalWidth) return null;
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const g = canvas.getContext('2d', { willReadFrequently: true });
+    g.drawImage(img, 0, 0);
+    const pixels = g.getImageData(0, 0, canvas.width, canvas.height);
+    pixelCache.set(f, pixels);
+    if (pixelCache.size > PIXEL_CACHE_SIZE) pixelCache.delete(pixelCache.keys().next().value);
+    return pixels;
+  } catch (err) {
+    console.warn('[road-editor] could not read frame pixels:', err);
+    return null;
+  }
+}
+
+function buildWand() {
+  const group = document.createElementNS(SVG_NS, 'g');
+  group.setAttribute('class', 'rdv-wand');
+  const { box, result } = wand;
+  if (box) {
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    rect.setAttribute('class', 'rdv-wand-box');
+    rect.setAttribute('x', box.x0);
+    rect.setAttribute('y', box.y0);
+    rect.setAttribute('width', box.x1 - box.x0);
+    rect.setAttribute('height', box.y1 - box.y0);
+    rect.setAttribute('vector-effect', 'non-scaling-stroke');
+    group.appendChild(rect);
+  }
+  if (result?.points.length >= 3) {
+    const poly = document.createElementNS(SVG_NS, 'polygon');
+    poly.setAttribute('class', wand.warn ? 'rdv-wand-preview rdv-wand-warn' : 'rdv-wand-preview');
+    poly.setAttribute('points', result.points.map(p => p.join(',')).join(' '));
+    poly.setAttribute('vector-effect', 'non-scaling-stroke');
+    group.appendChild(poly);
+  }
+  return group;
+}
+
+// Adds the outline as a polygon of the current class, selected so it can be refined straight away.
+// The tool stays on Color for the next one.
+function acceptWand() {
+  if (!wandUsable()) return;
+  const { frame, result } = wand;
+  if (!ensureDrawable(frame)) return;
+  setWand(null);
+  edit([frame], () => {
+    frame.shapes.push({ label: currentClass, points: result.points, group_id: null, description: '', shape_type: 'polygon', flags: {} });
+  });
+  ctx.showClass(currentClass);
+  setSelection([{ frame, idx: frame.shapes.length - 1, vertices: null }]);
 }
 
 // ── Review decisions ──────────────────────────────────────────────────────────
