@@ -7,6 +7,7 @@ import {
   initRoadEditor, resetEditor, onStreetLoaded, dirtyCount, save as saveEdits,
   decorateFrame, onLayoutChanged, onOrientationChanged, onClassVisibilityChanged,
 } from './road-editor.js';
+import { initMagnifier, setMagnifier, setMagnifierPower } from './road-magnifier.js';
 
 // Road Viewer — lays a street's frames edge-to-edge as one continuous road,
 // with LabelMe annotations overlaid and per-class visibility toggles.
@@ -15,6 +16,9 @@ import {
 const ORIENT_KEY  = 'pavement_road_viewer_orientation';
 const LABEL_KEY   = 'pavement_road_viewer_label_mode';
 const SECTION_KEY = 'pavement_road_viewer_section_mode';
+const MAG_KEY     = 'pavement_road_viewer_magnifier';
+const MAG_POWER_KEY = 'pavement_road_viewer_magnifier_power';
+const MAG_POWERS  = ['3', '2', '4', '6', '8'];   // first is the default
 const SVG_NS      = 'http://www.w3.org/2000/svg';
 const ZOOM_MIN    = 25;
 const ZOOM_MAX    = 800;
@@ -45,6 +49,8 @@ let lastLayout  = null;   // last relayout's anchor, reused by the next zoom ste
 let orientation = readPref(ORIENT_KEY, ['vertical', 'horizontal']);
 let labelMode   = readPref(LABEL_KEY, ['dark', 'light']);          // label colors tuned for dark or light imagery
 let sectionMode = readPref(SECTION_KEY, SECTION_MODES.map(m => m.value));
+let magnifier   = readPref(MAG_KEY, ['off', 'on']) === 'on';
+let magPower    = readPref(MAG_POWER_KEY, MAG_POWERS);
 let observer    = null;
 const imageSem  = makeSemaphore(6);
 
@@ -85,6 +91,18 @@ export function renderRoadViewer(container) {
           <button class="btn btn-ghost btn-sm rdv-zoom-btn" id="rdv-zoom-in" aria-label="Zoom in">+</button>
           <span id="rdv-zoom-val">100%</span>
           <button class="btn btn-ghost btn-sm" id="rdv-fit">Fit</button>
+        </div>
+
+        <div class="rdv-field" title="Shows the spot under the cursor enlarged beside it, labels included, for placing points precisely (M)">
+          <div class="rdv-seg">
+            <button class="rdv-seg-btn rdv-mag-btn" id="rdv-mag" aria-pressed="false">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 10l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              Magnifier
+            </button>
+          </div>
+          <select id="rdv-mag-power" class="rdv-mag-power" aria-label="Magnification">
+            ${[...MAG_POWERS].sort((a, b) => a - b).map(p => `<option value="${p}">${p}×</option>`).join('')}
+          </select>
         </div>
 
         <span id="rdv-status" class="text-dim rdv-status"></span>
@@ -144,6 +162,23 @@ export function renderRoadViewer(container) {
       applyColors();
       renderLabelToggles();
     }));
+
+  container.querySelector('#rdv-mag').addEventListener('click', () => toggleMagnifier());
+  const powerSelect = container.querySelector('#rdv-mag-power');
+  powerSelect.value = magPower;
+  powerSelect.addEventListener('change', () => {
+    magPower = powerSelect.value;
+    writePref(MAG_POWER_KEY, magPower);
+    setMagnifierPower(Number(magPower));
+    powerSelect.blur();   // so M works again straight away
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'm' || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+    if (!road.getClientRects().length) return;   // another tab is open
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
+    e.preventDefault();
+    toggleMagnifier();
+  });
 
   const sectionSelect = container.querySelector('#rdv-section-mode');
   sectionSelect.value = sectionMode;
@@ -212,8 +247,21 @@ export function renderRoadViewer(container) {
     refreshStatus: updateStatus,
   });
 
+  initMagnifier(road, { frames: () => frames, scale: currentScale });
+  setMagnifierPower(Number(magPower));
+  toggleMagnifier(magnifier);
+
   updateSegButtons();
   showEmpty('Open a dataset in the Datasets tab first.');
+}
+
+function toggleMagnifier(on = !magnifier) {
+  magnifier = on;
+  writePref(MAG_KEY, on ? 'on' : 'off');
+  const btn = root.querySelector('#rdv-mag');
+  btn.classList.toggle('active', on);
+  btn.setAttribute('aria-pressed', String(on));
+  setMagnifier(on);
 }
 
 function datasetKey() {
@@ -502,10 +550,10 @@ function applyColors() {
   if (!style) return;
   const rules = classes.map((c, i) => {
     const color = classColor(c.name, labelMode);
-    return `.rdv-road g[data-class-idx="${i}"] .rdv-shape { stroke: ${color}; }
-.rdv-road g[data-class-idx="${i}"] .rdv-shape[data-kind="area"] { fill: ${color}40; }`;
+    return `:is(.rdv-road, .rdv-loupe) g[data-class-idx="${i}"] .rdv-shape { stroke: ${color}; }
+:is(.rdv-road, .rdv-loupe) g[data-class-idx="${i}"] .rdv-shape[data-kind="area"] { fill: ${color}40; }`;
   });
-  rules.push(`.rdv-road .rdv-halo { stroke: ${haloColor(labelMode)}; }`);
+  rules.push(`:is(.rdv-road, .rdv-loupe) .rdv-halo { stroke: ${haloColor(labelMode)}; }`);
   style.textContent = rules.join('\n');
 }
 
@@ -513,7 +561,7 @@ function applyHidden() {
   const style = root?.querySelector('#rdv-hide-style');
   if (!style) return;
   style.textContent = [...hidden]
-    .map(i => `.rdv-road g[data-class-idx="${i}"] { display: none; }`)
+    .map(i => `:is(.rdv-road, .rdv-loupe) g[data-class-idx="${i}"] { display: none; }`)
     .join('\n');
 }
 

@@ -1324,6 +1324,34 @@ input[type="color"].rv-color-pick::-webkit-color-swatch { border: none; border-r
 .rdv-inner .rdv-draft polygon,
 .rdv-inner .rdv-draft rect { fill: none; stroke: #fff; stroke-width: 2; stroke-dasharray: 6 4; }
 .rdv-inner .rdv-draft-point { fill: #fff; stroke: #000; stroke-width: 1; }
+
+/* Magnifier: copies of the frames under the cursor, enlarged by --m. Lines are divided by --m so they
+   stay as thin as on the road and don't cover the detail being looked at. */
+.rdv-mag-btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.rdv-field select.rdv-mag-power { min-width: 0; }
+.rdv-loupe {
+  display: none; position: fixed; left: 0; top: 0; z-index: 1000; width: 220px; height: 220px;
+  box-sizing: border-box; border-radius: 50%; overflow: hidden; pointer-events: none;
+  border: 2px solid var(--accent); background: var(--bg-surface); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+.rdv-loupe-view { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-origin: 0 0; }
+.rdv-loupe-view > .rdv-frame { position: absolute; margin: 0; }
+.rdv-loupe .rdv-frame-active { z-index: 2; }
+.rdv-loupe-pixels img { image-rendering: pixelated; }
+.rdv-loupe .rdv-inner .rdv-shape { stroke-width: calc(2px / var(--m)); }
+.rdv-loupe .rdv-inner .rdv-halo  { stroke-width: calc(5px / var(--m)); }
+.rdv-loupe .rdv-inner g.rdv-selected .rdv-shape { stroke-width: calc(3px / var(--m)); }
+.rdv-loupe .rdv-inner g.rdv-selected .rdv-halo  { stroke: #fff; stroke-opacity: 1; stroke-width: calc(6px / var(--m)); }
+.rdv-loupe .rdv-inner .rdv-draft :is(polyline, polygon, rect),
+.rdv-loupe .rdv-inner .rdv-wand-preview { stroke-width: calc(2px / var(--m)); stroke-dasharray: calc(6px / var(--m)) calc(4px / var(--m)); }
+.rdv-loupe .rdv-inner .rdv-wand-box { stroke-width: calc(1.5px / var(--m)); stroke-dasharray: calc(4px / var(--m)) calc(3px / var(--m)); }
+/* Crosshair on the cursor's spot */
+.rdv-loupe::before, .rdv-loupe::after {
+  content: ''; position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+}
+.rdv-loupe::before { width: 1px; height: 17px; }
+.rdv-loupe::after  { width: 17px; height: 1px; }
 .rdv-locked-note {
   position: absolute; z-index: 1; bottom: 4px; left: 4px; padding: 1px 6px; border-radius: 3px;
   background: var(--danger); color: #fff; font-size: 11px; pointer-events: none;
