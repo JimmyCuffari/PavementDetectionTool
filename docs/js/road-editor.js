@@ -1,4 +1,4 @@
-import { getToken } from './auth.js';
+import { getToken, ensureFreshToken, tokenExpiresSoon } from './auth.js';
 import { listAllFiles, downloadFileContent, upsertFile, findOrCreateFolder } from './drive.js';
 import { getDatasetRawDataFolder } from './dataset-manager.js';
 import { makeSemaphore, toast } from './utils.js';
@@ -1392,13 +1392,20 @@ export function save() {
 async function saveFrames(dirty, street, reviewed) {
   const token = getToken();
   if (!token) { toast('Not signed in', 'error'); return; }
+  // Google sign-ins last about an hour. Renewing needs a sign-in window, which the browser only
+  // allows straight after the click or key press that started the save, so do it now if it's due.
+  const renewing = tokenExpiresSoon();
+  const fresh = ensureFreshToken();
   saving = true;
-  saveProgress = 'Saving…';
+  saveProgress = renewing ? 'Renewing sign-in…' : 'Saving…';
   updateBar();
 
   const failures = [];
   const written = [];
   try {
+    await fresh;
+    saveProgress = 'Saving…';
+    updateBar();
     // findOrCreateFolder would create a second folder if its lookup hit an error, so it's only
     // used when the street had no labels folder when it was loaded
     const labelsFolderId = street.labelsFolderId ?? (await findOrCreateFolder(token, 'labels', street.id)).id;
@@ -1414,7 +1421,7 @@ async function saveFrames(dirty, street, reviewed) {
         // Could be a real deletion, or a listing that failed (listAllFiles returns [] on errors).
         // Either way, creating a new file here risks a duplicate.
         failures.push({ frame: f, message: 'its label file was not found in Drive. Refresh the street and try again.' });
-      } else if (existing && existing.modifiedTime !== f.labelModified) {
+      } else if (existing && !f.labelModifiedUnknown && existing.modifiedTime !== f.labelModified) {
         conflicts.push({ frame: f, existing });
       } else {
         ready.push({ frame: f, existing });
@@ -1444,14 +1451,19 @@ async function saveFrames(dirty, street, reviewed) {
     })));
 
     if (written.length) {
-      // Record the new modified times, so the next save doesn't see our own writes as conflicts
-      const updated = await listLabelFiles(token, labelsFolderId);
+      // Record the new modified times, so the next save doesn't see our own writes as conflicts.
+      // The files are already written, so if this listing fails they still count as saved; their
+      // times are left unknown and the next save doesn't treat them as changed by someone else.
+      let updated = null;
+      try { updated = await listLabelFiles(token, labelsFolderId); } catch (err) { console.warn('Listing after save failed:', err); }
       for (const { frame, snapshot, id } of written) {
         frame.savedShapes = snapshot;
         frame.dirty = JSON.stringify(frame.shapes) !== snapshot;
         frame.labelId = id;
         frame.hasLabel = true;
-        frame.labelModified = updated.get(labelFileName(frame))?.modifiedTime ?? frame.labelModified;
+        const modified = updated?.get(labelFileName(frame))?.modifiedTime;
+        frame.labelModified = modified ?? frame.labelModified;
+        frame.labelModifiedUnknown = !modified;
       }
     }
 

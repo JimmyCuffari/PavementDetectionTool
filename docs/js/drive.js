@@ -1,4 +1,4 @@
-import { refreshToken } from './auth.js';
+import { refreshToken, getToken } from './auth.js';
 import { slugify, isoNow, makeSemaphore } from './utils.js';
 import { SHARED_FOLDER_ID } from './config.js';
 
@@ -14,12 +14,33 @@ const folderCache = new Map();
 
 // ── Low-level helpers ──────────────────────────────────────────────────────────
 
-async function driveRequest(token, url, options = {}) {
-  const headers = { Authorization: `Bearer ${token}`, ...options.headers };
-  const resp = await fetch(url, { ...options, headers });
-  if (resp.status === 401) {
+// How long Drive gets to start answering before the request is abandoned, so a stalled connection
+// gives an error instead of waiting forever. Uploads get longer, since the body has to go first.
+// Reading a response's body (a large download) isn't limited.
+const RESPONSE_TIMEOUT_MS = 60 * 1000;
+const UPLOAD_TIMEOUT_MS   = 5 * 60 * 1000;
+
+async function driveRequest(token, url, options = {}, retried = false) {
+  // A token passed in at the start of a long job may have been renewed since, so use the newest
+  const current = getToken() || token;
+  const headers = { Authorization: `Bearer ${current}`, ...options.headers };
+  const controller = new AbortController();
+  const limit = options.body ? UPLOAD_TIMEOUT_MS : RESPONSE_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), limit);
+  let resp;
+  try {
+    resp = await fetch(url, { ...options, headers, signal: options.signal ?? controller.signal });
+  } catch (err) {
+    if (controller.signal.aborted && !options.signal?.aborted) {
+      throw new Error(`Google Drive didn't respond within ${limit / 1000} seconds`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (resp.status === 401 && !retried) {
     const newToken = await refreshToken();
-    return driveRequest(newToken, url, options);
+    return driveRequest(newToken, url, options, true);
   }
   return resp;
 }
