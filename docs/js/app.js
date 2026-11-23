@@ -4,6 +4,7 @@ import { renderUploader }   from './label-uploader.js';
 import { renderDownloader } from './dataset-downloader.js';
 import { renderReviewer }   from './annotation-reviewer.js';
 import { renderRefactor }   from './label-refactor.js';
+import { renderProgress, refreshProgress } from './progress-report.js';
 import { renderTrainer }    from './model-trainer.js';
 import { renderTester }     from './model-tester.js';
 import { renderProcessData } from './process-data.js';
@@ -135,6 +136,7 @@ renderUploader(document.getElementById('tab-uploader'));
 renderDownloader(document.getElementById('tab-downloader'));
 renderReviewer(document.getElementById('tab-reviewer'));
 renderRefactor(document.getElementById('tab-refactor'));
+renderProgress(document.getElementById('tab-progress'));
 renderTrainer(document.getElementById('tab-train-model'));
 renderTester(document.getElementById('tab-testing'));
 renderProcessData(document.getElementById('tab-process-data'));
@@ -172,6 +174,7 @@ function onSignedIn(user) {
   if (isMaster) {
     document.getElementById('reviewer-tab-btn')?.classList.remove('hidden');
     document.getElementById('refactor-tab-btn')?.classList.remove('hidden');
+    document.getElementById('progress-tab-btn')?.classList.remove('hidden');
   }
 
   document.getElementById('sync-timestamp').classList.remove('hidden');
@@ -198,12 +201,13 @@ function showToolSubtabs() {
   if (isMasterUser) {
     document.getElementById('reviewer-tab-btn')?.classList.remove('hidden');
     document.getElementById('refactor-tab-btn')?.classList.remove('hidden');
+    document.getElementById('progress-tab-btn')?.classList.remove('hidden');
   }
 }
 
 function hideToolSubtabs() {
   ['uploader-subtab-btn', 'downloader-subtab-btn',
-   'reviewer-tab-btn', 'refactor-tab-btn'].forEach(id => {
+   'reviewer-tab-btn', 'refactor-tab-btn', 'progress-tab-btn'].forEach(id => {
     document.getElementById(id)?.classList.add('hidden');
   });
 }
@@ -245,6 +249,7 @@ function switchSubTab(tabName) {
   document.querySelectorAll('.subtab-panel').forEach((panel) => {
     panel.classList.toggle('hidden', panel.id !== `tab-${tabName}`);
   });
+  if (tabName === 'progress') refreshProgress();   // picks up a dataset or project change
 }
 
 function updateProjectSwitcher() {

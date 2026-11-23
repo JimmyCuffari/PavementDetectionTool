@@ -1388,3 +1388,41 @@ input[type="color"].rv-color-pick::-webkit-color-swatch { border: none; border-r
   top: -6px; bottom: 0; left: 0; right: auto; border-top: none;
   border-left: 1px solid rgba(255, 255, 255, 0.35);
 }
+
+/* ── Progress (admin) ───────────────────────────────────────────────────────── */
+.pg-intro { font-size: 13px; margin-bottom: 1rem; max-width: 760px; }
+.pg-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1rem; margin-bottom: 0.75rem; }
+.pg-field { display: flex; align-items: center; gap: 0.4rem; font-size: 13px; color: var(--text-dim); }
+.pg-field select {
+  padding: 0.35rem 0.5rem; background: var(--bg-elevated); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--font);
+}
+.pg-status { font-size: 13px; margin: 0.5rem 0 0.75rem; min-height: 1.4em; }
+.pg-grid-wrap { overflow-x: auto; }
+.pg-table { border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.pg-table th, .pg-table td { padding: 0; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.pg-table thead th { padding: 0.4rem 0.6rem; color: var(--text-dim); font-weight: 600; }
+.pg-table tfoot td, .pg-table tfoot th { padding: 0.45rem 0.6rem; font-weight: 600; color: var(--text-bright); border-bottom: none; }
+.pg-table td.pg-empty { padding: 0.45rem 0.6rem; color: var(--text-dim); opacity: 0.5; }
+.pg-table .pg-person-col { text-align: left; position: sticky; left: 0; background: var(--bg); z-index: 1; }
+.pg-table .pg-total-col { padding: 0.45rem 0.6rem; font-weight: 600; color: var(--text-bright); border-left: 1px solid var(--border); }
+.pg-cell, .pg-person {
+  display: block; width: 100%; min-width: 4.2rem; padding: 0.45rem 0.6rem; border: 1px solid transparent;
+  background: transparent; color: var(--text); font: inherit; text-align: inherit; cursor: pointer;
+}
+.pg-cell { background: rgba(0, 122, 204, var(--shade, 0)); text-align: right; }
+.pg-person { min-width: 12rem; max-width: 20rem; overflow: hidden; text-overflow: ellipsis; color: var(--text-bright); }
+.pg-cell:hover, .pg-person:hover { border-color: var(--accent); }
+.pg-cell.pg-selected, .pg-person.pg-selected { border-color: var(--text-bright); }
+.pg-detail {
+  margin-top: 1rem; padding: 0.75rem 1rem; background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; max-width: 1000px;
+}
+.pg-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; margin-bottom: 0.5rem; }
+.pg-detail-head .btn { margin-left: auto; }
+.pg-street { padding: 0.5rem 0; border-top: 1px solid var(--border); }
+.pg-street-name { color: var(--text-bright); margin-bottom: 0.2rem; }
+.pg-line { display: flex; align-items: baseline; gap: 0.75rem; padding: 0.1rem 0 0.1rem 0.75rem; }
+.pg-kind { flex: none; min-width: 6.5rem; color: var(--text-dim); }
+.pg-ranges { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.pg-note { font-size: 12px; margin-top: 1rem; max-width: 760px; }
